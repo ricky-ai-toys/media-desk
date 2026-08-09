@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+data/media.db
+data/media.db-*
+.loopx/
+.codex/
+.env
+*.eml
+run/

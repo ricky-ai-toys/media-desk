@@ -1,0 +1,106 @@
+# Media Desk source catalog.
+# kind: yt_playlist | rss
+# yt_playlist entries produce full transcripts; rss entries produce article
+# headline/summary items (framing + coverage only, no quotes).
+# Add a source here without touching code — adapters are generic.
+
+sources:
+  - id: bloomberg_asia_trade
+    name: "The Asia Trade"
+    outlet: "Bloomberg Asia TV"
+    kind: yt_playlist
+    playlist_id: "PLGaYlBJIOoa8zJLXejV8ZIXJydxAMu-kW"
+    playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa8zJLXejV8ZIXJydxAMu-kW"
+    title_regex: "The Asia Trade\\s+\\d{1,2}/\\d{1,2}/\\d{4}"
+    enabled: true
+
+  - id: bloomberg_china_show
+    name: "The China Show"
+    outlet: "Bloomberg Asia TV"
+    kind: yt_playlist
+    playlist_id: "PLGaYlBJIOoa94hnb-z2i64eVPcGZPUvo9"
+    playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa94hnb-z2i64eVPcGZPUvo9"
+    title_regex: "The China Show\\s*(?:\\|\\s*)?\\d{1,2}/\\d{1,2}/\\d{4}"
+    enabled: true
+
+  - id: bloomberg_insight
+    name: "Insight with Haslinda Amin"
+    outlet: "Bloomberg Asia TV"
+    kind: yt_playlist
+    playlist_id: "PLGaYlBJIOoa_6-KXq8HBmOQcs62Qfvdv2"
+    playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa_6-KXq8HBmOQcs62Qfvdv2"
+    title_regex: "Insight with Haslinda Amin\\s*(?:\\|\\s*)?\\d{1,2}/\\d{1,2}/\\d{4}"
+    enabled: true
+
+  - id: cnbc_wire
+    name: "CNBC Markets"
+    outlet: "CNBC"
+    kind: rss
+    feed_url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114"
+    enabled: true
+
+  - id: cnbc_squawk_box_asia
+    name: "Squawk Box Asia"
+    outlet: "CNBC Asia"
+    kind: yt_playlist
+    playlist_id: ""
+    playlist_url: ""
+    title_regex: "Squawk Box Asia.*"
+    enabled: false
+    note: "Full-show transcripts not reliably on YouTube (clips only). Re-enable when an episode playlist surfaces."
+
+  - id: wire_markets
+    name: "Market News Wire"
+    outlet: "Wire (deals, flows, equities)"
+    kind: rss
+    feed_url: "https://www.investing.com/rss/news_25.rss"
+    enabled: true
+
+  - id: reuters_top
+    name: "Reuters Top News"
+    outlet: "Reuters"
+    kind: rss
+    feed_url: "https://www.reutersagency.com/feed/?best-topics=top-news&post_type=best"
+    enabled: false
+    note: "Reuters official feeds discontinued; awaiting a stable public endpoint."
+
+  - id: ft_home
+    name: "Financial Times"
+    outlet: "Financial Times"
+    kind: rss
+    feed_url: "https://www.ft.com/rss/home"
+    enabled: true
+
+  - id: bloomberg_wire
+    name: "Bloomberg Markets"
+    outlet: "Bloomberg"
+    kind: rss
+    feed_url: "https://feeds.bloomberg.com/markets/news.rss"
+    enabled: true
+
+fetch:
+  lookback_days: 7
+  min_transcript_words: 500
+  transcript_dir: "/home/rickyubuntu/workspace/media-desk/data/transcripts"
+  use_auto_subs_fallback: true
+
+analysis:
+  model: "deepseek-v4-flash"
+  base_url: "https://api.deepseek.com/v1"
+  api_key_env: "DEEPSEEK_API_KEY"
+  temperature: 0.2
+  chunk_words: 2000
+
+db:
+  path: "/home/rickyubuntu/workspace/media-desk/data/media.db"
+
+v5:
+  raw_root: "/home/rickyubuntu/workspace/yt-weekly/raw"
+  analysis_root: "/home/rickyubuntu/workspace/yt-weekly/analysis"
+  editions_root: "/home/rickyubuntu/workspace/yt-weekly/burson-weekly"
+  skill_root: "/home/rickyubuntu/.hermes/skills/burson-international-financial-media-weekly"
+
+web:
+  port: 8517
+  public_read_only: true
+  admin_token_env: "MEDIA_DESK_ADMIN_TOKEN"
