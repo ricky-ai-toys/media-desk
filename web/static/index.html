@@ -4,43 +4,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Media Desk — International Financial Media Weekly Brief</title>
-<link rel="stylesheet" href="/static/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='18' fill='%232458d3'/><text x='50' y='68' font-size='52' text-anchor='middle' fill='white' font-family='Georgia'>MD</text></svg>">
+<link rel="stylesheet" href="/static/dist/app.css">
+<link rel="preload" href="/static/dist/fonts/newsreader-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/newsreader-latin-400-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/newsreader-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/newsreader-latin-600-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/newsreader-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/ibm-plex-sans-latin-500-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/ibm-plex-sans-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/ibm-plex-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/static/dist/fonts/ibm-plex-mono-latin-600-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' fill='%23161a1d'/><text x='50' y='68' font-size='48' text-anchor='middle' fill='%23f7f6f1' font-family='Georgia'>MD</text></svg>">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">
-    <span class="mark">MD</span>
-    <div>
-      <h1>MEDIA DESK</h1>
-      <p>International Financial Media · Weekly Brief</p>
-    </div>
-  </div>
-  <div class="controls">
-    <select id="edition-select" title="edition"></select>
-    <div class="seg" id="lang-seg">
-      <button id="lang-en" class="chip active">EN</button>
-      <button id="lang-zh" class="chip">中文</button>
-    </div>
-    <span id="qc-badge" class="qc"></span>
-    <button id="export-btn" class="btn">⇩ Export</button>
-    <input id="search" type="search" placeholder="Search transcripts + wire…">
-  </div>
-</header>
-
-<main id="view">
-  <div class="loading">loading brief…</div>
-</main>
-
-<footer class="foot">
-  <span>MEDIA DESK</span>
-  <span id="pipe-state"></span>
-  <span id="clock"></span>
-</footer>
+<div id="app-header"></div>
+<main id="view" class="reading"></main>
+<div id="app-footer"></div>
 <script>
 window.addEventListener("error", (e) => { document.body.setAttribute("data-err", String(e.message)); });
 window.addEventListener("unhandledrejection", (e) => { document.body.setAttribute("data-rej", String(e.reason?.message || e.reason)); });
 </script>
-<script src="/static/app.js"></script>
+<script src="/static/dist/app.js"></script>
 </body>
 </html>

@@ -76,3 +76,66 @@ def test_upsert_roundtrip_new_fields(tmp_path, monkeypatch):
     assert a["score"] == db.labelled_score("high", "rising")
     n = ed["narratives"][0]
     assert n["driver_en"] == "d" and n["next_test_zh"] == "nt"
+
+
+def test_topic_fact_columns_roundtrip(tmp_path, monkeypatch):
+    """v2.1: driver/next_test/stakes persist through upsert -> edition_full."""
+    from backend.app import config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    eid = db.upsert_edition({
+        "report_title": "International Financial Media Weekly",
+        "start_date": "2026-08-10", "end_date": "2026-08-14",
+        "agenda_topics": [{
+            "rank": 1, "title_en": "T", "title_zh": "议题",
+            "summary_en": "s", "summary_zh": "摘要",
+            "driver_en": "d", "driver_zh": "驱动",
+            "next_test_en": "n", "next_test_zh": "检验",
+            "stakes_en": "st", "stakes_zh": "影响",
+        }],
+    }, {"episodes": []}, None)
+    t = db.edition_full(eid)["agenda"][0]
+    assert t["driver_en"] == "d" and t["driver_zh"] == "驱动"
+    assert t["next_test_en"] == "n" and t["stakes_zh"] == "影响"
+
+
+def test_upsert_analysis_dedupes(tmp_path, monkeypatch):
+    """One row per episode — re-analysis updates instead of appending."""
+    from backend.app import config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_episode({"id": "ep1", "source_id": None, "title": "t",
+                       "pub_date": "2026-08-03", "kind": "yt"})
+    db.upsert_analysis("ep1", "md1", ["a"], [])
+    db.upsert_analysis("ep1", "md2", ["a"], [])
+    with db.conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM analyses WHERE episode_id='ep1'").fetchone()[0]
+        md = c.execute("SELECT markdown FROM analyses WHERE episode_id='ep1'").fetchone()[0]
+    assert n == 1
+    assert md == "md2"
+
+
+def test_analysis_migration_dedupes_legacy_dups(tmp_path, monkeypatch):
+    """Existing DBs with duplicate analyses get collapsed to one row each."""
+    from backend.app import config as cfg
+    monkeypatch.setattr(cfg, "DB_PATH", tmp_path / "t.db")
+    db.init_db()
+    db.upsert_episode({"id": "ep1", "source_id": None, "title": "t",
+                       "pub_date": "2026-08-03", "kind": "yt"})
+    db.upsert_analysis("ep1", "md1", [], [])
+    db.upsert_analysis("ep1", "md2", [], [])
+    db.upsert_analysis("ep1", "md3", [], [])
+    with db.conn() as c:
+        c.execute("DROP INDEX idx_analyses_ep")
+    db._migrate(_conn_for(cfg.DB_PATH))
+    with db.conn() as c:
+        n = c.execute("SELECT COUNT(*) FROM analyses WHERE episode_id='ep1'").fetchone()[0]
+        md = c.execute("SELECT markdown FROM analyses WHERE episode_id='ep1'").fetchone()[0]
+    assert n == 1
+    assert md == "md3"
+
+
+def _conn_for(path):
+    c = sqlite3.connect(str(path))
+    c.row_factory = sqlite3.Row
+    return c

@@ -4,12 +4,46 @@ Checks: reporting period, source coverage, dynamic topics (==4), structure,
 narratives 4, recurring questions, EN/ZH figure alignment, exact report name,
 bilingual blocks, legal-block phrases only.
 """
+import datetime as _dt
 import json
 import re
 
 from .. import db
 
 LEGAL_BLOCK = ("LOW_CONFIDENCE_BLOCK", "DO_NOT_SEND", "unverified claim in report")
+
+
+def topic_facts_present(data: dict) -> bool:
+    topics = data.get("agenda_topics", [])
+    return bool(topics) and all(t.get("driver_en") and t.get("next_test_en") and t.get("stakes_en")
+                                for t in topics)
+
+
+def week_ahead_present(data: dict) -> bool:
+    events = data.get("week_ahead_events", [])
+    if not (3 <= len(events) <= 5):
+        return False
+    try:
+        end = _dt.date.fromisoformat(data["end_date"])
+    except (KeyError, ValueError):
+        return False
+    lo, hi = end + _dt.timedelta(days=1), end + _dt.timedelta(days=10)
+    for e in events:
+        try:
+            d = _dt.date.fromisoformat(str(e.get("date", "")))
+        except ValueError:
+            return False
+        if not (lo <= d <= hi) or not e.get("event_en"):
+            return False
+    return True
+
+
+def terse_lengths(data: dict) -> bool:
+    topics = data.get("agenda_topics", [])
+    if not topics:
+        return True
+    over = [t for t in topics if len((t.get("summary_en") or "").split()) > 24]
+    return len(over) <= max(1, len(topics) // 5)
 
 
 def run_qc(edition_id: str) -> dict:
@@ -33,7 +67,8 @@ def run_qc(edition_id: str) -> dict:
                 "en_zh_figures_align", "bilingual_blocks_present",
                 "thesis_present", "narrative_arc_complete",
                 "watchpoint_triggers_present", "media_exchanges_complete",
-                "evidence_status_vocab", "agenda_labeled")
+                "evidence_status_vocab", "agenda_labeled",
+                "topic_facts_present", "week_ahead_present")
 
     def add_v2(name, ok, detail):
         add(name, ok if not legacy else True,
@@ -87,6 +122,12 @@ def run_qc(edition_id: str) -> dict:
             and t.get("evidence") in {"strong", "moderate", "emerging"}
             for t in data.get("agenda_topics", [])),
         "priority/momentum/evidence labels on all topics")
+    add_v2("topic_facts_present", topic_facts_present(data),
+        f"{len(data.get('agenda_topics', []))} topics with driver/next_test/stakes")
+    add_v2("week_ahead_present", week_ahead_present(data),
+        f"{len(data.get('week_ahead_events', []))} events in next-week window")
+    add("terse_lengths", terse_lengths(data),
+        "topic summaries within soft length budget", blockable=False)
     add("en_zh_figures_align", _figures_align(data), "number sets match",
         blockable=legacy)
     add("exact_report_name",
@@ -111,7 +152,11 @@ def run_qc(edition_id: str) -> dict:
     result = {"status": "PASS" if passed_publish else "FAIL",
               "blocked": bool(blocks), "checks": checks, "warnings": warnings, "blocks": blocks}
     with db.conn() as c:
-        c.execute("UPDATE editions SET qc_json=? WHERE id=?", (json.dumps(result, ensure_ascii=False), edition_id))
+        c.execute(
+            "UPDATE editions SET qc_json=?, status=? WHERE id=?",
+            (json.dumps(result, ensure_ascii=False),
+             "published" if result["status"] == "PASS" else "needs_review",
+             edition_id))
     return result
 
 
@@ -121,5 +166,11 @@ def _figures_align(data: dict) -> bool:
     return en == zh
 
 
+# Figures that appear in every edition regardless of content (report dates,
+# common market references) and would always mismatch EN vs ZH. Kept explicit
+# so a false block is easy to trace; extend when a new constant appears.
+_NUM_EXCLUDE = {"13", "17", "7", "2026"}
+
+
 def _numbers(s: str) -> set[str]:
-    return {t for t in re.findall(r"\d+", s) if t not in {"13", "17", "7", "2026"}}
+    return {t for t in re.findall(r"\d+", s) if t not in _NUM_EXCLUDE}

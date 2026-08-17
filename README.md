@@ -8,12 +8,24 @@ weekly email + PDF demoted to exports.
 ## Stack
 
 - Backend: Python 3.13, FastAPI, SQLite + FTS5 (no ORM)
-- Frontend: static HTML/CSS/vanilla JS (no build step) — command-deck UI
+- Frontend: TypeScript components (Header / EditionSwitcher / ReadingContainer /
+  Footer) bundled with esbuild into `web/static/dist/` — newsprint editorial
+  layout, self-hosted fonts (Newsreader / IBM Plex, no CDN), zero-CLS
 - LLM: DeepSeek `deepseek-v4-flash` (official API) for daily episode analysis
   and weekly synthesis
 - Ingestion: RSS feeds (feedparser) + YouTube playlists (yt-dlp)
 - Serving: systemd `media-desk.service` → uvicorn on 127.0.0.1:8517 →
   Caddy vhost `media.ricky.study:8443` (Tailscale HTTPS)
+
+## Frontend build
+
+```bash
+cd web
+npm install                 # once; build/typecheck/watch scripts
+npm run build               # bundle -> web/static/dist (fonts included)
+npm run watch               # rebuild on change
+npm run typecheck           # tsc --noEmit
+```
 
 ## Quick start
 

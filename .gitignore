@@ -3,8 +3,12 @@ __pycache__/
 *.pyc
 data/media.db
 data/media.db-*
+data/transcripts/
+data/*.pdf
 .loopx/
 .codex/
 .env
 *.eml
 run/
+web/node_modules/
+web/static/dist/

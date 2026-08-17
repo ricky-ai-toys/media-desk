@@ -1,0 +1,20 @@
+{
+  "name": "media-desk-web",
+  "version": "6.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Media Desk frontend — editorial financial command deck (TypeScript, no runtime deps)",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@fontsource/ibm-plex-mono": "^5.2.6",
+    "@fontsource/ibm-plex-sans": "^5.2.6",
+    "@fontsource/newsreader": "^5.2.6",
+    "esbuild": "^0.25.6",
+    "puppeteer-core": "^25.5.0",
+    "typescript": "^5.9.2"
+  }
+}

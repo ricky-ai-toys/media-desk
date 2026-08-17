@@ -23,6 +23,7 @@ def main():
     ap.add_argument("--edition", help="resynthesize only this edition id")
     args = ap.parse_args()
 
+    db.init_db()
     with db.conn() as c:
         rows = c.execute("SELECT id, start_date, end_date FROM editions ORDER BY end_date").fetchall()
     if args.edition:

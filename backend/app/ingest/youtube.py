@@ -43,7 +43,8 @@ def _playlist_rows(source: dict, limit: int = 30) -> list[dict]:
         return []
     cmd = ["yt-dlp", "--flat-playlist", "--playlist-end", str(limit),
            "--print", "%(id)s|%(upload_date)s|%(title)s", url]
-    out = subprocess.check_output(cmd, env=_env(), text=True, stderr=subprocess.STDOUT)
+    out = subprocess.check_output(cmd, env=_env(), text=True,
+                                  stderr=subprocess.STDOUT, timeout=120)
     rows = []
     for line in out.splitlines():
         parts = line.split("|")
@@ -75,6 +76,7 @@ def _vtt_to_text(text: str) -> str:
 def fetch_transcript(source: dict, vid: str, out_dir: Path) -> str | None:
     """Download captions as VTT, return plain text or None."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    min_words = int(config.FETCH.get("min_transcript_words", 500))
     url = f"https://www.youtube.com/watch?v={vid}"
     subprocess.run(
         ["yt-dlp", "--skip-download", "--write-auto-subs", "--write-subs",
@@ -85,7 +87,7 @@ def fetch_transcript(source: dict, vid: str, out_dir: Path) -> str | None:
     for v in vtts:
         try:
             text = _vtt_to_text(v.read_text(encoding="utf-8", errors="replace"))
-            if len(text.split()) > 100:
+            if len(text.split()) > min_words:
                 Path(out_dir / f"{vid}.txt").write_text(text, encoding="utf-8")
                 return text
         except OSError:
@@ -98,7 +100,8 @@ def _episode_exists(ep_id: str) -> bool:
         return c.execute("SELECT 1 FROM episodes WHERE id=?", (ep_id,)).fetchone() is not None
 
 
-def chunks_of(text: str, size: int = 900) -> list[str]:
+def chunks_of(text: str, size: int | None = None) -> list[str]:
+    size = size or int(config.ANALYSIS.get("chunk_words", 900))
     words = text.split()
     return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
 
@@ -106,7 +109,7 @@ def chunks_of(text: str, size: int = 900) -> list[str]:
 def sync_playlist(source: dict) -> dict:
     try:
         rows = _playlist_rows(source)
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         db.log_source_run(source["id"], "yt_playlist", False, 0, str(e)[:200])
         return {"source": source["id"], "ok": False, "found": 0, "error": str(e)[:200]}
     lookback = datetime.timedelta(days=int(config.FETCH.get("lookback_days", 7)))

@@ -115,6 +115,36 @@ def test_search_requires_query(client):
     assert client.get("/api/search").status_code == 422
 
 
+def test_search_special_chars_no_500(client):
+    """FTS syntax characters must never bubble up as a 500."""
+    for q in ('%22%22%22', 'yen%20OR', 'yen%3A', '%27%27', 'yen%20AND'):
+        r = client.get("/api/search?q=" + q)
+        assert r.status_code == 200, (q, r.status_code)
+        assert "results" in r.json()
+
+
+def test_search_multi_word_and(client):
+    r = client.get("/api/search?q=yen%20dollar")
+    assert r.status_code == 200
+
+
+def test_radar_bad_edition_404(client):
+    assert client.get("/api/radar?edition=notanid").status_code == 404
+    assert client.get("/api/radar?edition=2026-13-99_to_2026-99-99").status_code == 404
+
+
+def test_coverage_matrix_shape(client):
+    latest = client.get("/api/meta").json()["latest"]
+    d = client.get("/api/radar").json()
+    desk = client.get("/api/desk").json()
+    assert "coverage_matrix" in d
+    assert len(d["coverage_matrix"]) == len(desk["agenda"])
+    for m in d["coverage_matrix"]:
+        assert "topic" in m and "shows" in m
+    assert d["sources"] and d["wire_totals"]
+    assert len(d["wire_feed"]) > 0
+
+
 def test_edition_detail(client):
     latest = client.get("/api/meta").json()["latest"]
     r = client.get(f"/api/edition/{latest}")
@@ -140,6 +170,16 @@ def test_export_email(client):
     assert r.status_code == 200
     assert "html" in r.headers["content-type"]
     assert "MEDIA" in r.text.upper() or "media" in r.text
+
+
+def test_export_unknown_kind_404(client):
+    latest = client.get("/api/meta").json()["latest"]
+    assert client.get(f"/export/{latest}/nope").status_code == 404
+
+
+def test_export_bad_edition_404(client):
+    for eid in ("nope", "2026-99-99_to_2026-99-99", "..%2F..%2Fetc"):
+        assert client.get(f"/export/{eid}/csv").status_code == 404, eid
 
 
 def test_admin_guard(client):

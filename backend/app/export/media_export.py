@@ -1,5 +1,6 @@
 """CSV + PDF exports. PDF uses headless chromium print-to-pdf of the print layout."""
 import csv
+import html
 import io
 import json
 import shutil
@@ -50,7 +51,8 @@ def print_html(edition: dict) -> str:
         + '<h2>Methodology</h2><p>Bilingual report synthesised from the week\'s TV transcripts '
         'and daily episode analyses; agenda topics are selected dynamically by editorial LLM; '
         'interview log derives from anchor-guest exchanges.</p>'
-        '<h2>QC</h2><pre>' + json.dumps(edition.get("qc") or {}, ensure_ascii=False, indent=1)[:2000] + "</pre>"
+        '<h2>QC</h2><pre>' + html.escape(
+            json.dumps(edition.get("qc") or {}, ensure_ascii=False, indent=1)[:2000]) + "</pre>"
     )
     return body + appendix
 

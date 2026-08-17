@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from . import config
+from .tokens import kw, overlap
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS sources (
@@ -123,6 +124,12 @@ _MIGRATIONS = [
     "ALTER TABLE narratives ADD COLUMN why_zh TEXT",
     "ALTER TABLE narratives ADD COLUMN next_test_en TEXT",
     "ALTER TABLE narratives ADD COLUMN next_test_zh TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN driver_en TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN driver_zh TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN next_test_en TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN next_test_zh TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN stakes_en TEXT",
+    "ALTER TABLE agenda_topics ADD COLUMN stakes_zh TEXT",
 ]
 
 
@@ -134,6 +141,17 @@ def _migrate(c) -> None:
         cols = [r["name"] for r in c.execute(f"PRAGMA table_info({table})")]
         if col not in cols:
             c.execute(stmt)
+    # Analyses were historically appended without a conflict target
+    # (ON CONFLICT(id) can never fire on an AUTOINCREMENT PK). Dedupe
+    # existing rows (keep the newest) before enforcing uniqueness.
+    has_analyses = c.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='analyses'").fetchone()
+    if has_analyses:
+        c.execute(
+            "DELETE FROM analyses WHERE id NOT IN "
+            "(SELECT MAX(id) FROM analyses GROUP BY episode_id)")
+        c.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_analyses_ep ON analyses(episode_id)")
 
 
 @contextmanager
@@ -229,7 +247,9 @@ def upsert_analysis(episode_id: str, markdown: str, hot_topics: list | None, ten
         c.execute(
             "INSERT INTO analyses (episode_id, markdown, hot_topics_json, tension_json, generated_at) "
             "VALUES (?,?,?,?,?) "
-            "ON CONFLICT(id) DO NOTHING",
+            "ON CONFLICT(episode_id) DO UPDATE SET markdown=excluded.markdown, "
+            "hot_topics_json=excluded.hot_topics_json, tension_json=excluded.tension_json, "
+            "generated_at=excluded.generated_at",
             (episode_id, markdown,
              json.dumps(hot_topics or [], ensure_ascii=False),
              json.dumps(tension or [], ensure_ascii=False), utcnow()),
@@ -252,15 +272,18 @@ def upsert_edition(data: dict, manifest: dict | None, qc: dict | None) -> str:
         c.execute("DELETE FROM agenda_topics WHERE edition_id=?", (edition_id,))
         for t in data.get("agenda_topics", []):
             c.execute(
-                "INSERT INTO agenda_topics (edition_id, rank, title_en, title_zh, summary_en, summary_zh, direction, score, priority, momentum, evidence, coverage) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO agenda_topics (edition_id, rank, title_en, title_zh, summary_en, summary_zh, direction, score, priority, momentum, evidence, coverage, driver_en, driver_zh, next_test_en, next_test_zh, stakes_en, stakes_zh) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (edition_id, t.get("rank"), t.get("title_en", ""), t.get("title_zh", ""),
                  t.get("summary_en", ""), t.get("summary_zh", ""),
                  t.get("direction") or t.get("momentum", ""),
                  t.get("score") if t.get("score") is not None else labelled_score(
                      t.get("priority", ""), t.get("momentum", "")),
                  t.get("priority", ""), t.get("momentum", ""),
-                 t.get("evidence", ""), t.get("coverage")))
+                 t.get("evidence", ""), t.get("coverage"),
+                 t.get("driver_en", ""), t.get("driver_zh", ""),
+                 t.get("next_test_en", ""), t.get("next_test_zh", ""),
+                 t.get("stakes_en", ""), t.get("stakes_zh", "")))
         c.execute("DELETE FROM narratives WHERE edition_id=?", (edition_id,))
         for i, n in enumerate(data.get("narratives", [])):
             c.execute(
@@ -307,27 +330,47 @@ def log_source_run(source_id: str, kind: str, ok: bool, found: int, detail: str)
             (source_id, kind, utcnow(), utcnow(), int(ok), found, detail))
 
 
+def _fts_query(q: str) -> str:
+    """Turn free-text input into a safe FTS5 expression: quoted AND terms.
+
+    FTS5 throws on syntax errors for raw user input (`"`, dangling OR/AND,
+    `:`, `-`); quoted terms are always literal, so special characters in
+    the query can never reach the MATCH grammar.
+    """
+    terms = re.findall(r"\w+", q or "", flags=re.UNICODE)
+    return " AND ".join(f'"{t}"' for t in terms)
+
+
 def query_fts(q: str, limit: int = 30) -> list[dict]:
     out = []
+    match_q = _fts_query(q)
+    if not match_q:
+        return out
     with conn() as c:
-        rows = c.execute(
-            "SELECT e.id AS episode_id, e.title, e.pub_date, e.show_name, s.name AS source_name, "
-            "snippet(transcript_fts, 0, '[', ']', '…', 12) AS snip "
-            "FROM transcript_fts "
-            "JOIN transcript_chunks tc ON tc.id = transcript_fts.rowid "
-            "JOIN episodes e ON e.id = tc.episode_id JOIN sources s ON s.id = e.source_id "
-            "WHERE transcript_fts MATCH ? ORDER BY rank LIMIT ?", (q, limit)).fetchall()
-        for r in rows:
-            out.append({"kind": "transcript", **dict(r)})
-        rows = c.execute(
-            "SELECT a.title, a.link, a.pub_date, s.name AS source_name, "
-            "snippet(articles_fts, 0, '[', ']', '…', 12) AS snip "
-            "FROM articles_fts "
-            "JOIN articles a ON a.id = articles_fts.rowid "
-            "JOIN sources s ON s.id = a.source_id "
-            "WHERE articles_fts MATCH ? ORDER BY rank LIMIT ?", (q, limit)).fetchall()
-        for r in rows:
-            out.append({"kind": "wire", **dict(r)})
+        try:
+            rows = c.execute(
+                "SELECT e.id AS episode_id, e.title, e.pub_date, e.show_name, s.name AS source_name, "
+                "snippet(transcript_fts, 0, '[', ']', '…', 12) AS snip "
+                "FROM transcript_fts "
+                "JOIN transcript_chunks tc ON tc.id = transcript_fts.rowid "
+                "JOIN episodes e ON e.id = tc.episode_id JOIN sources s ON s.id = e.source_id "
+                "WHERE transcript_fts MATCH ? ORDER BY rank LIMIT ?", (match_q, limit)).fetchall()
+            for r in rows:
+                out.append({"kind": "transcript", **dict(r)})
+        except sqlite3.OperationalError:
+            pass
+        try:
+            rows = c.execute(
+                "SELECT a.title, a.link, a.pub_date, s.name AS source_name, "
+                "snippet(articles_fts, 0, '[', ']', '…', 12) AS snip "
+                "FROM articles_fts "
+                "JOIN articles a ON a.id = articles_fts.rowid "
+                "JOIN sources s ON s.id = a.source_id "
+                "WHERE articles_fts MATCH ? ORDER BY rank LIMIT ?", (match_q, limit)).fetchall()
+            for r in rows:
+                out.append({"kind": "wire", **dict(r)})
+        except sqlite3.OperationalError:
+            pass
     return out
 
 
@@ -428,20 +471,34 @@ def source_health() -> list[dict]:
 
 
 def coverage_radar(edition_id: str) -> dict:
-    """Topic x source coverage matrix for an edition (from manifest + data)."""
+    """Topic x source coverage matrix for an edition: for each agenda topic,
+    which shows carried it (keyword overlap against episode hot topics)."""
     with conn() as c:
         ed = c.execute("SELECT * FROM editions WHERE id=?", (edition_id,)).fetchone()
         if not ed:
             return {"edition": edition_id, "matrix": []}
-        manifest = json.loads(ed["manifest_json"] or "{}")
         data = json.loads(ed["data_json"] or "{}")
-        by_source: dict[str, set] = {}
-        for ep in manifest.get("episodes", []):
-            by_source.setdefault(ep.get("program", "?"), set())
-        topics = [t["title_en"] for t in data.get("agenda_topics", [])]
-        return {"edition": edition_id, "topics": topics,
-                "sources": [{"show": k, "episodes": len(v)} for k, v in by_source.items()],
-                "matrix": []}
+        rows = [dict(r) for r in c.execute(
+            "SELECT e.show_name, a.hot_topics_json FROM episodes e "
+            "LEFT JOIN analyses a ON a.episode_id = e.id "
+            "WHERE e.pub_date>=? AND e.pub_date<=?",
+            (ed["start_date"], ed["end_date"]))]
+        topics = [t.get("title_en", "") for t in data.get("agenda_topics", [])]
+    matrix = []
+    for t in topics:
+        k = kw(t)
+        shows: dict[str, int] = {}
+        for r in rows:
+            names = " ".join(x.get("title", "") for x in
+                             json.loads(r["hot_topics_json"] or "[]"))
+            if overlap(k, kw(names)) >= 0.4:
+                shows[r["show_name"]] = shows.get(r["show_name"], 0) + 1
+        matrix.append({
+            "topic": t,
+            "shows": [{"show": s, "episodes": n} for s, n in
+                      sorted(shows.items(), key=lambda x: -x[1])],
+        })
+    return {"edition": edition_id, "topics": topics, "matrix": matrix}
 
 
 def episodes_by_date(start: str, end: str) -> list[dict]:

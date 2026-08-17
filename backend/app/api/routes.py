@@ -1,5 +1,7 @@
 """Public read-only API routers (admin gated separately)."""
+import datetime
 import json
+import re
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -29,12 +31,11 @@ def meta():
 
 @router.get("/desk")
 def desk(edition: str | None = None):
+    latest = db.latest_edition()
     ed = db.edition_full(edition) if edition else (
-        db.edition_full(db.latest_edition()["id"]) if db.latest_edition() else None)
+        db.edition_full(latest["id"]) if latest else None)
     if not ed:
         raise HTTPException(404, "no edition found")
-    press = pressure_index(db.interview_entries(ed["id"], limit=500))
-    interviews = db.interview_entries(ed["id"], limit=120)
     agenda = list(ed["agenda"])
     for a in agenda:
         if isinstance(a.get("score"), (int, float)):
@@ -50,8 +51,9 @@ def desk(edition: str | None = None):
             "asymmetry": framing.asymmetry(ed["id"]),
         },
         "attribution": _topic_attribution(ed["id"], agenda),
-        "interviews": interviews,
-        "ticker": _ticker(interviews),
+        "interviews": db.interview_entries(ed["id"], limit=120),
+        "pressure": pressure_index(db.interview_entries(ed["id"], limit=500)),
+        "ticker": _ticker(db.interview_entries(ed["id"], limit=120)),
     }
 
 
@@ -63,7 +65,6 @@ _STOP = {"the", "and", "for", "with", "that", "this", "from", "into", "its", "ar
 
 def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
     """Which shows carried each agenda topic (FTS keyword match over chunk text)."""
-    import re as _re
     from collections import Counter
     out = []
     with db.conn() as c:
@@ -76,7 +77,7 @@ def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
             return []
         for a in agenda:
             text = f"{a.get('title_en') or ''} {a.get('summary_en') or ''}".lower()
-            words = _re.findall(r"[a-z]{4,}", text)
+            words = re.findall(r"[a-z]{4,}", text)
             kws = [w for w in Counter(w for w in words if w not in _STOP).most_common(8)]
             counts: Counter = Counter()
             seen: set[str] = set()
@@ -146,19 +147,25 @@ def radar(edition: str | None = None):
     health = db.source_health()
     latest = db.latest_edition()
     eid = edition or (latest["id"] if latest else None)
-    coverage = []
-    if eid:
-        with db.conn() as c:
-            rows = c.execute(
-                "SELECT e.show_name, e.pub_date, COUNT(*) n FROM episodes e "
-                "WHERE e.pub_date>=? AND e.pub_date<=? GROUP BY e.show_name, e.pub_date",
-                (eid.split("_to_")[0], eid.split("_to_")[1])).fetchall()
-        coverage = [dict(r) for r in rows]
+    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})", eid or "")
+    if not m:
+        raise HTTPException(404, "edition not found")
+    try:
+        start = datetime.date.fromisoformat(m.group(1)).isoformat()
+        end = datetime.date.fromisoformat(m.group(2)).isoformat()
+    except ValueError:
+        raise HTTPException(404, "edition not found")
+    with db.conn() as c:
+        coverage = [dict(r) for r in c.execute(
+            "SELECT e.show_name, e.pub_date, COUNT(*) n FROM episodes e "
+            "WHERE e.pub_date>=? AND e.pub_date<=? GROUP BY e.show_name, e.pub_date",
+            (start, end))]
     with db.conn() as c:
         wire = [dict(r) for r in c.execute(
             "SELECT s.outlet, COUNT(*) n FROM articles a JOIN sources s ON s.id=a.source_id "
             "GROUP BY s.outlet ORDER BY n DESC")]
     return {"sources": health, "coverage": coverage, "wire_totals": wire,
+            "coverage_matrix": db.coverage_radar(eid)["matrix"],
             "wire_feed": _recent_articles()}
 
 

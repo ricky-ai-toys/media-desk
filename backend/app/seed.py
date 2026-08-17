@@ -23,7 +23,8 @@ SOURCE_BY_SHOW = {
 }
 
 
-def _chunk(text: str, size: int = 900) -> list[str]:
+def _chunk(text: str, size: int | None = None) -> list[str]:
+    size = size or int(config.ANALYSIS.get("chunk_words", 900))
     words = text.split()
     return [" ".join(words[i:i + size]) for i in range(0, len(words), size)]
 

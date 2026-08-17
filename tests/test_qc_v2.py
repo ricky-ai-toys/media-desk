@@ -28,7 +28,9 @@ def _full(v2: bool) -> dict:
         "report_title": "International Financial Media Weekly",
         "agenda_topics": [
             {"title_en": "t", "summary_en": "s", "priority": "critical",
-             "momentum": "accelerating", "evidence": "strong"} for _ in range(4)],
+             "momentum": "accelerating", "evidence": "strong",
+             "driver_en": "d", "next_test_en": "x", "stakes_en": "st"}
+            for _ in range(4)],
         "narratives": [
             {"title_en": "story", "title_zh": "叙事",
              "driver_en": "d", "why_en": "w", "next_test_en": "x",
@@ -46,6 +48,11 @@ def _full(v2: bool) -> dict:
             "watchpoints": [{"trigger_en": "w"}] * 3,
             "media_exchanges": [{"pattern_en": "p", "premise_en": "p"}] * 3,
             "evidence_statuses": [{"status": "supported"}] * 2,
+            "week_ahead_events": [
+                {"date": "2026-08-10", "event_en": "BOJ"},
+                {"date": "2026-08-12", "event_en": "CPI"},
+                {"date": "2026-08-14", "event_en": "Tariff"},
+            ],
         })
     return {"id": "2026-08-03_to_2026-08-07", "start_date": "2026-08-03",
             "end_date": "2026-08-07", "manifest": {"episodes": [1] * 5}, "data": data}
@@ -121,3 +128,72 @@ def test_v2_too_many_topics_blocks():
     _seed(full)
     r = qcmod.run_qc(full["id"])
     assert r["status"] == "FAIL" and "topics_selected_dynamically" in r["blocks"]
+
+
+def test_qc_pass_sets_published_status():
+    _seed(full := _full(True))
+    r = qcmod.run_qc(full["id"])
+    assert r["status"] == "PASS"
+    with db.conn() as c:
+        st = c.execute("SELECT status FROM editions WHERE id=?", (full["id"],)).fetchone()[0]
+    assert st == "published"
+
+
+def test_qc_fail_sets_needs_review_status():
+    full = _break(_full(True), thesis_en="")
+    _seed(full)
+    qcmod.run_qc(full["id"])
+    with db.conn() as c:
+        st = c.execute("SELECT status FROM editions WHERE id=?", (full["id"],)).fetchone()[0]
+    assert st == "needs_review"
+
+
+def test_qc_topic_facts_present():
+    assert qcmod.topic_facts_present({"agenda_topics": [
+        {"driver_en": "d", "next_test_en": "n", "stakes_en": "s"}]})
+    assert not qcmod.topic_facts_present({"agenda_topics": [
+        {"driver_en": "d", "next_test_en": "n"}]})
+    assert not qcmod.topic_facts_present({"agenda_topics": []})
+
+
+def test_qc_topic_facts_blocks():
+    full = _break(_full(True))
+    full["data"]["agenda_topics"][0].pop("stakes_en")
+    _seed(full)
+    r = qcmod.run_qc(full["id"])
+    assert r["status"] == "FAIL" and "topic_facts_present" in r["blocks"]
+
+
+def test_qc_week_ahead_window():
+    good = {"end_date": "2026-08-14", "week_ahead_events": [
+        {"date": "2026-08-17", "event_en": "BOJ"},
+        {"date": "2026-08-19", "event_en": "CPI"},
+        {"date": "2026-08-21", "event_en": "Earnings"}]}
+    assert qcmod.week_ahead_present(good)
+    bad_past = {"end_date": "2026-08-14", "week_ahead_events": [
+        {"date": "2026-08-13", "event_en": "past"},
+        {"date": "2026-08-19", "event_en": "CPI"},
+        {"date": "2026-08-21", "event_en": "Earnings"}]}
+    assert not qcmod.week_ahead_present(bad_past)
+    bad_far = {"end_date": "2026-08-14", "week_ahead_events": [
+        {"date": "2026-08-17", "event_en": "BOJ"},
+        {"date": "2026-08-19", "event_en": "CPI"},
+        {"date": "2026-09-01", "event_en": "far"}]}
+    assert not qcmod.week_ahead_present(bad_far)
+    assert not qcmod.week_ahead_present({"end_date": "2026-08-14", "week_ahead_events": []})
+
+
+def test_qc_week_ahead_blocks():
+    full = _break(_full(True), week_ahead_events=[])
+    _seed(full)
+    r = qcmod.run_qc(full["id"])
+    assert r["status"] == "FAIL" and "week_ahead_present" in r["blocks"]
+
+
+def test_qc_terse_lengths_soft():
+    assert qcmod.terse_lengths({"agenda_topics": [{"summary_en": "short"}]})
+    long = {"agenda_topics": [{"summary_en": "word " * 30},
+                              {"summary_en": "word " * 30},
+                              {"summary_en": "word " * 30}]}
+    assert not qcmod.terse_lengths(long)
+    assert qcmod.terse_lengths({"agenda_topics": []})

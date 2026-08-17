@@ -12,32 +12,17 @@ import re
 from collections import defaultdict
 
 from .. import db
-
-_QUESTION_STOP = {"the", "and", "for", "are", "will", "of", "to", "in", "on", "how",
-                  "you", "its", "can", "all", "one", "new", "was", "but", "not", "out",
-                  "has", "why", "what", "week", "china", "market", "markets", "from",
-                  "with", "their", "this", "that", "more", "after", "about"}
-
-
-def _kw(text: str) -> set[str]:
-    return {w for w in re.findall(r"[a-z0-9]{3,}", (text or "").lower())
-            if w not in _QUESTION_STOP}
-
-
-def _over(a: set[str], b: set[str]) -> float:
-    if not a or not b:
-        return 0.0
-    return len(a & b) / min(len(a), len(b))
+from ..tokens import kw, overlap
 
 
 def _tracks(topics: list[dict]) -> list[dict]:
     """Group agenda_topics rows across editions into lifecycle tracks."""
     tracks: list[dict] = []
     for row in topics:
-        k = _kw(row["title_en"])
+        k = kw(row["title_en"])
         best_i, best = None, 0.0
         for i, tr in enumerate(tracks):
-            s = _over(tr["_kw"], k)
+            s = overlap(tr["_kw"], k)
             if s > best:
                 best_i, best = i, s
         if best_i is not None and best >= 0.4:
@@ -116,11 +101,11 @@ def collisions(edition_id: str) -> list[dict]:
     analyses = _analyses_for_week(ed["start_date"], ed["end_date"])
     by_topic: dict[str, list] = defaultdict(list)
     for t in topics:
-        k = _kw(t.get("title_en", ""))
+        k = kw(t.get("title_en", ""))
         if not k:
             continue
         for a in analyses:
-            if _over(k, _kw(a["title"])) >= 0.5:
+            if overlap(k, kw(a["title"])) >= 0.5:
                 by_topic[t["title_en"]].append({
                     "source": a["show_name"], "date": a["pub_date"],
                     "score": _tone_score(a["markdown"] or ""), "episode_title": a["title"]})
@@ -159,14 +144,14 @@ def lead_lag(edition_id: str) -> list[dict]:
     eps = _week_episode_topics(ed["start_date"], ed["end_date"])
     out = []
     for t in ed["agenda"]:
-        k = _kw(t.get("title_en", ""))
+        k = kw(t.get("title_en", ""))
         hits = []
         for e in eps:
             topics = " ".join(x.get("title", "") for x in
                               json.loads(e["hot_topics_json"] or "[]"))
-            if _over(k, _kw(topics)) >= 0.4:
+            if overlap(k, kw(topics)) >= 0.4:
                 hits.append(e)
-        wires = [w for w in wire if _over(k, _kw(w["title"])) >= 0.4]
+        wires = [w for w in wire if overlap(k, kw(w["title"])) >= 0.4]
         first_show = min(hits, key=lambda s: s["pub_date"])["pub_date"] if hits else None
         first_wire = min(wires, key=lambda w: w["pub_date"])["pub_date"] if wires else None
         gap_days = None
@@ -192,12 +177,12 @@ def asymmetry(edition_id: str) -> list[dict]:
     shows = sorted({e["show_name"] for e in eps})
     out = []
     for t in ed["agenda"]:
-        k = _kw(t.get("title_en", ""))
+        k = kw(t.get("title_en", ""))
         absent = []
         for sh in shows:
             carried = any(
                 e["show_name"] == sh and
-                _over(k, _kw(" ".join(x.get("title", "") for x in
+                overlap(k, kw(" ".join(x.get("title", "") for x in
                                       json.loads(e["hot_topics_json"] or "[]")))) >= 0.4
                 for e in eps)
             if not carried:

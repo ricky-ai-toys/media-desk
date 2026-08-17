@@ -35,6 +35,17 @@ SYSTEM = (
     "one job. "
     "(5) Watchpoints must name a trigger, the possible narrative change, affected areas, and what "
     "would raise its priority. "
+    "(6) Every ZH field must read as natural, idiomatic simplified Chinese written by a "
+    "mainland financial-media desk — restructure sentences and collocations rather than "
+    "translating EN word-for-word; no English syntax or awkward calques in ZH text. "
+    "(7) Write terse. Thesis <= 25 words. Each agenda summary is ONE sentence of <= 22 words. "
+    "Each comms implication <= 14 words. Every cell field (driver, why, next_test, stakes, shift, "
+    "affected, priority_raises, premise, response, lesson) <= 10 words, telegraphic, no lists. "
+    "ZH fields obey the same brevity. "
+    "(8) week_ahead_events must be 3-5 real, dated events strictly AFTER the reporting week "
+    "(next Monday-Friday), each with a one-clause why-it-matters; never invent dates or events "
+    "not supported by the corpus or universally known calendar items (policy meetings, data "
+    "releases, earnings, deadlines). "
     "EXACTLY 3-5 agenda topics, EXACTLY 3-4 narratives, 3 media_exchanges, 3-5 watchpoints, "
     "recurring question groups of 3-5 questions each. No paragraphs."
 )
@@ -44,7 +55,8 @@ SCHEMA = (
     'source_file_count, episode_count, '
     'thesis_en, thesis_zh, '
     'agenda_topics[] {rank, title_en, title_zh, summary_en, summary_zh, priority(critical|high|medium), '
-    'momentum(accelerating|rising|stable|fading), evidence(strong|moderate|emerging), coverage(int)}, '
+    'momentum(accelerating|rising|stable|fading), evidence(strong|moderate|emerging), coverage(int), '
+    'driver_en, driver_zh, next_test_en, next_test_zh, stakes_en, stakes_zh}, '
     'narratives[] {title_en, title_zh, from_en, to_en, from_zh, to_zh, driver_en, driver_zh, '
     'why_en, why_zh, next_test_en, next_test_zh}, '
     'comms_boxes[] {title_en, implication_en, questions_likely_en[], evidence_to_prepare_en[], '
@@ -56,6 +68,7 @@ SCHEMA = (
     'pattern_zh, premise_zh, response_zh, lesson_zh}, '
     'watchpoints[] {trigger_en, shift_en, affected_en, priority_raises_en, '
     'trigger_zh, shift_zh, affected_zh, priority_raises_zh}, '
+    'week_ahead_events[] {date(YYYY-MM-DD), event_en, event_zh, why_en, why_zh}, '
     'evidence_statuses[] {section, status(confirmed|supported|emerging|interpretive), note}, '
     'interview_groups_en[] {title_en, role_en, questions_en[3]}, '
     'interview_groups_zh[] {title_zh, role_zh, questions_zh[3]}, '
@@ -141,6 +154,7 @@ def _derive_legacy(data: dict) -> dict:
         if es.get("status") not in ("confirmed", "supported", "emerging", "interpretive"):
             es["status"] = "interpretive"
     data.setdefault("evidence_statuses", [])
+    data.setdefault("week_ahead_events", [])
 
     pr = data.get("pr_counsel") or {}
     boxes = data.get("comms_boxes") or []

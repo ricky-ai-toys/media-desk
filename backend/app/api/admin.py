@@ -1,6 +1,6 @@
 """Admin endpoints — token-gated, run ingestion/synthesis/QC on demand."""
 import datetime
-from pathlib import Path
+import secrets
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
@@ -16,7 +16,7 @@ def _guard(x_admin_token: str | None = Header(default=None)):
     expected = config.admin_token()
     if not expected:
         raise HTTPException(403, "admin token not configured")
-    if x_admin_token != expected:
+    if not secrets.compare_digest(x_admin_token or "", expected):
         raise HTTPException(401, "bad token")
 
 
