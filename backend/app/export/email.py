@@ -83,7 +83,7 @@ def render_email(edition: dict) -> str:
     srcs = d.get("source_file_count", len(episodes))
     cards = ""
     for t in d.get("agenda_topics", []):
-        badge = t.get("direction", "stable")
+        badge = t.get("direction") or t.get("momentum") or "stable"
         cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
 <div class="card-title">{html.escape(t['title_en'])}<span class="badge {html.escape(badge)}">{badge.title()}</span></div>
 <div class="card-copy">{html.escape(first_sentence(t['summary_en'], 22))}</div></td></tr>"""
@@ -113,7 +113,7 @@ def render_email(edition: dict) -> str:
     zh_cards = ""
     for t in d.get("agenda_topics", []):
         zh_cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
-<div class="card-title">{html.escape(t.get('title_zh', ''))}<span class="badge {html.escape(t.get('direction', 'stable'))}">{t.get('direction', 'stable').title()}</span></div>
+<div class="card-title">{html.escape(t.get('title_zh', ''))}<span class="badge {html.escape(t.get('direction') or t.get('momentum') or 'stable')}">{(t.get('direction') or t.get('momentum') or 'stable').title()}</span></div>
 <div class="card-copy">{html.escape(first_sentence(t.get('summary_zh', ''), 22))}</div></td></tr>"""
     zh_groups = ""
     for g in d.get("interview_groups_zh", []):
@@ -134,9 +134,9 @@ def render_email(edition: dict) -> str:
 <div class="meta-cell"><b>{html.escape(outlets)}</b>source in this edition</div></div></div>
 <section><h2>This week's media agenda</h2>
 <div class="intro">Topics are selected dynamically from the week's coverage — not a standing list.</div>
-<div class="summary-box"><b>In one sentence:</b> {html.escape(d.get('week_summary_en', ''))}</div>
 <table class="card-table">{cards}</table></section>
 <section><h2>Narrative shifts</h2><table class="narrative-table">{nrows}</table></section>
+{_week_ahead(d)}
 <section><h2>What television interviewers kept asking</h2>{groups}</section>
 <section><h2>PR counsel</h2>{pr_table}{watch}</section>
 <div class="lang-banner">中文摘要 · 本节为完整中文编辑版本，并非逐句机械翻译。</div>
@@ -145,7 +145,7 @@ def render_email(edition: dict) -> str:
 <section><h2>叙事转向</h2>
 <table class="narrative-table">{_zh_narratives(d)}</table></section>
 <section><h2>电视主播反复追问的问题</h2>{zh_groups}</section>
-<section><h2>公关建议</h2>{_zh_pr(d)}</section>
+<section><h2>公关建议</h2>{_zh_pr(d)}{_zh_watchlist(d)}</section>
 <div class="footer"><b>PDF attachment:</b> full bilingual report, interview log and methodology appendix.<br>
 Prepared from the supplied media universe: {html.escape(outlets)} · {d['start_date']} to {d['end_date']}</div>
 </div></body></html>"""
@@ -172,6 +172,30 @@ def _zh_pr(d: dict) -> str:
 <td class="opportunity"><h3>机遇</h3>{html.escape(first_sentence(pr.get('opportunity_zh', ''), 30))}</td></tr>
 <tr><td class="prepare"><h3>需准备</h3>{html.escape(first_sentence(pr.get('prepare_zh', ''), 30))}</td>
 <td class="avoid"><h3>需避免</h3>{html.escape(first_sentence(pr.get('avoid_zh', ''), 30))}</td></tr></table>"""
+
+
+def _week_ahead(d: dict) -> str:
+    """Dated events to watch — omitted entirely when absent (no empty blocks)."""
+    events = d.get("week_ahead_events") or []
+    if not events:
+        return ""
+    rows = "".join(
+        f"<tr><td class='rank'>{html.escape(str(e.get('date', ''))[5:].replace('-', '/'))}</td>"
+        f"<td class='card-body'><div class='card-title'>{html.escape(e.get('event_en', ''))}</div>"
+        f"<div class='card-copy'>{html.escape(e.get('why_en', ''))}</div></td></tr>"
+        for e in events)
+    return ("<section><h2>Week ahead</h2>"
+            "<div class='intro'>Dates are calendar items supplied with the corpus; "
+            "verify against official schedules before acting.</div>"
+            f"<table class='card-table'>{rows}</table></section>")
+
+
+def _zh_watchlist(d: dict) -> str:
+    items = d.get("watchlist_zh") or []
+    if not items:
+        return ""
+    lis = "".join(f"<li>{html.escape(str(w)[:140])}</li>" for w in items)
+    return f"<h3>延续观察清单</h3><ul>{lis}</ul>"
 
 
 def email_subject(edition: dict) -> str:

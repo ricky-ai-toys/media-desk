@@ -149,6 +149,8 @@ export interface TickerItem {
   show?: string;
   tone?: string;
   question?: string;
+  /** false when the wording was not found verbatim in the transcript */
+  verified?: boolean;
 }
 
 export interface PressureItem {

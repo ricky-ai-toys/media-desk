@@ -16,7 +16,12 @@ from ..tokens import kw, overlap
 
 
 def _tracks(topics: list[dict]) -> list[dict]:
-    """Group agenda_topics rows across editions into lifecycle tracks."""
+    """Group agenda_topics rows across editions into lifecycle tracks.
+
+    Chaining requires BOTH overlap >= 0.5 AND >= 3 shared keywords: short
+    topic titles (4-6 keywords) were merging/splitting on 2-word accidents
+    (the live Hormuz story appeared as two separate tracks).
+    """
     tracks: list[dict] = []
     for row in topics:
         k = kw(row["title_en"])
@@ -25,7 +30,8 @@ def _tracks(topics: list[dict]) -> list[dict]:
             s = overlap(tr["_kw"], k)
             if s > best:
                 best_i, best = i, s
-        if best_i is not None and best >= 0.4:
+        if (best_i is not None and best >= 0.5
+                and len(tracks[best_i]["_kw"] & k) >= 3):
             tracks[best_i]["points"].append(row)
             tracks[best_i]["_kw"] |= k
         else:
@@ -63,9 +69,11 @@ def norm10(score: float) -> float:
 
 
 def _phase(pts: list[dict]) -> str:
-    if len(pts) == 1:
-        return "new"
     last = pts[-1].get("direction", "")
+    if len(pts) == 1:
+        # a single-sighting topic already fading is not "new" — it's a one-week
+        # story on its way out (yen intervention showed phase "new" while fading)
+        return "fading" if last in ("fading", "shifting") else "new"
     if last in ("fading", "shifting"):
         return "fading"
     if last in ("rising", "accelerating"):

@@ -18,8 +18,10 @@ from .. import llm
 from ..analyze.evidence import agenda_evidence, interview_monitor
 from ..tokens import kw, overlap
 
+from . import report_spec as spec
+
 SYSTEM = (
-    "You are the editor of International Financial Media Weekly (no agency branding). "
+    f"You are the editor of {spec.REPORT_TITLE} (no agency branding). "
     "Analyze ONLY the supplied weekly media corpus and its extracted evidence. "
     "Produce the structured bilingual report JSON. English first, full simplified "
     "Chinese adaptation for every ZH field. Acronyms (AI, ETF, ADR, CPI) stay as-is. "
@@ -43,16 +45,17 @@ SYSTEM = (
     "(6) Every ZH field must read as natural, idiomatic simplified Chinese written by a "
     "mainland financial-media desk — restructure sentences and collocations rather than "
     "translating EN word-for-word; no English syntax or awkward calques in ZH text. "
-    "(7) Write terse. Thesis <= 25 words. Each agenda summary is ONE sentence of <= 22 words. "
-    "Each comms implication <= 14 words. Every cell field (driver, why, next_test, stakes, shift, "
-    "affected, priority_raises, premise, response, lesson) <= 10 words, telegraphic, no lists. "
+    f"(7) Write terse. Thesis <= {spec.THESIS_MAX_WORDS} words. Each agenda summary is ONE "
+    f"sentence of <= {spec.SUMMARY_MAX_WORDS} words. "
+    f"Each comms implication <= {spec.COMMS_IMPLICATION_MAX_WORDS} words. Every cell field "
+    f"(driver, why, next_test, stakes, shift, affected, priority_raises, premise, response, "
+    f"lesson) <= {spec.CELL_MAX_WORDS} words, telegraphic, no lists. "
     "ZH fields obey the same brevity. "
     "(8) week_ahead_events must be 3-5 real, dated events strictly AFTER the reporting week "
     "(next Monday-Friday), each with a one-clause why-it-matters; never invent dates or events "
     "not supported by the corpus or universally known calendar items (policy meetings, data "
     "releases, earnings, deadlines). "
-    "EXACTLY 3-5 agenda topics, EXACTLY 3-4 narratives, 3 media_exchanges, 3-5 watchpoints, "
-    "recurring question groups of 3-5 questions each. No paragraphs."
+    + spec.counts_line()
 )
 
 SCHEMA = (
@@ -192,7 +195,7 @@ def _rule_based_statuses(data: dict) -> list[dict]:
 def _derive_legacy(data: dict) -> dict:
     """Schema v2 superset -> v1-compatible fields (email/PDF/QC keep working).
     Also guarantees week_summary (thesis) and repeated-count stability."""
-    data["report_title"] = "International Financial Media Weekly"
+    data["report_title"] = spec.REPORT_TITLE
     if not data.get("thesis_en"):
         data["thesis_en"] = data.get("week_summary_en", "")
     if not data.get("thesis_zh"):

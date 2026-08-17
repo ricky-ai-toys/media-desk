@@ -205,7 +205,8 @@ function commsCards(dd: DeskData): string {
             <b class="comms-title">${esc(pick(b.title_en, b.title_zh) || "—")}</b>
             <span class="comms-teaser">${esc(clip(pick(b.implication_en, b.implication_zh), 9))}</span>
           </summary>
-          <p class="implication">${esc(clip(pick(b.implication_en, b.implication_zh), 14))}</p>
+          ${(pick(b.implication_en, b.implication_zh) || "").split(/\s+/).length > 9
+            ? `<p class="implication">${esc(clip(pick(b.implication_en, b.implication_zh), 14))}</p>` : ""}
           ${Q.length ? `<span class="chunk-label" aria-hidden="true"></span><div class="chunk">${Q.map((q) => `<span class="chip">${esc(clip(q, 10))}</span>`).join("")}</div>` : ""}
           ${E.length ? `<span class="chunk-label ev" aria-hidden="true"></span><div class="chunk ev">${E.map((e) => `<span class="chip">${esc(clip(e, 10))}</span>`).join("")}</div>` : ""}
           ${b.risky_en ? `<div class="risky">${esc(L("Watch your tone", "注意表述"))} — ${esc(clip(pick(b.risky_en, b.risky_zh), 40))}</div>` : ""}
@@ -340,9 +341,11 @@ function tickerBlock(ticker: TickerItem[]): string {
     .map((x) => {
       const d = (x.date || "").slice(5);
       const tone = x.tone ? TONE_CLS[x.tone.toLowerCase()] || "tone-neutral" : "tone-neutral";
+      const paraphrase = x.verified === false
+        ? ` <span class="tag emerging">${esc(L("paraphrase", "转述"))}</span>` : "";
       return `
       <div class="tick">
-        <span class="s">${d ? esc(d) : ""}${x.show ? ` · ${esc(x.show)}` : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i></span>
+        <span class="s">${d ? esc(d) : ""}${x.show ? ` · ${esc(x.show)}` : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i>${paraphrase}</span>
         <p>${esc(clip(x.question, 14))}</p>
       </div>`;
     })

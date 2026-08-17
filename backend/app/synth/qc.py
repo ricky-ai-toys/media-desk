@@ -9,6 +9,7 @@ import json
 import re
 
 from .. import db
+from . import report_spec as spec
 
 LEGAL_BLOCK = ("LOW_CONFIDENCE_BLOCK", "DO_NOT_SEND", "unverified claim in report")
 
@@ -21,7 +22,7 @@ def topic_facts_present(data: dict) -> bool:
 
 def week_ahead_present(data: dict) -> bool:
     events = data.get("week_ahead_events", [])
-    if not (3 <= len(events) <= 5):
+    if not (spec.WEEK_AHEAD_RANGE[0] <= len(events) <= spec.WEEK_AHEAD_RANGE[1]):
         return False
     try:
         end = _dt.date.fromisoformat(data["end_date"])
@@ -67,7 +68,7 @@ def terse_lengths(data: dict) -> bool:
     topics = data.get("agenda_topics", [])
     if not topics:
         return True
-    over = [t for t in topics if len((t.get("summary_en") or "").split()) > 24]
+    over = [t for t in topics if len((t.get("summary_en") or "").split()) > spec.TERSE_QC_WORDS]
     return len(over) <= max(1, len(topics) // 5)
 
 
@@ -107,12 +108,14 @@ def run_qc(edition_id: str) -> dict:
         f"{ed['start_date']}..{ed['end_date']}")
     add("minimum_source_coverage", len(days) >= 4, f"{len(days)} weekdays")
     add("source_manifest_saved", bool(episodes), f"{len(episodes)} episodes")
-    add("topics_selected_dynamically", 3 <= len(data.get("agenda_topics", [])) <= 5,
+    add("topics_selected_dynamically",
+        spec.TOPIC_RANGE[0] <= len(data.get("agenda_topics", [])) <= spec.TOPIC_RANGE[1],
         f"{len(data.get('agenda_topics', []))} topics")
     add("agenda_structure_complete",
         all(t.get("title_en") and t.get("summary_en") for t in data.get("agenda_topics", [])),
         "all topics have title+summary")
-    add("narratives_3_to_4", 3 <= len(data.get("narratives", [])) <= 4,
+    add("narratives_3_to_4",
+        spec.NARRATIVE_RANGE[0] <= len(data.get("narratives", [])) <= spec.NARRATIVE_RANGE[1],
         f"{len(data.get('narratives', []))} narratives")
     add("recurring_questions_present",
         len(data.get("recurring_questions_en", [])) >= 3 or
@@ -124,29 +127,28 @@ def run_qc(edition_id: str) -> dict:
         sum(bool(n.get("driver_en") and n.get("why_en") and n.get("next_test_en"))
             for n in data.get("narratives", [])) >= 3,
         ">=3 narratives with driver/why/next_test")
-    add_v2("comms_boxes_present", len(data.get("comms_boxes", [])) >= 3,
+    add_v2("comms_boxes_present", len(data.get("comms_boxes", [])) >= spec.COMMS_BOXES_MIN,
         f"{len(data.get('comms_boxes', []))} comms boxes")
     add_v2("question_group_categories_vocab",
-        all(g.get("category") in ("policy_credibility", "market_consequences",
-                                  "corporate_exposure", "narrative_durability")
+        all(g.get("category") in spec.QUESTION_CATEGORIES
             for g in data.get("question_groups", [])),
         "categories within vocab")
     add_v2("watchpoint_triggers_present",
         all(bool(w.get("trigger_en")) for w in data.get("watchpoints", []))
-        and 3 <= len(data.get("watchpoints", [])) <= 5,
+        and spec.WATCHPOINT_RANGE[0] <= len(data.get("watchpoints", [])) <= spec.WATCHPOINT_RANGE[1],
         f"{len(data.get('watchpoints', []))} watchpoints with triggers")
     add_v2("media_exchanges_complete",
-        len(data.get("media_exchanges", [])) >= 3
+        len(data.get("media_exchanges", [])) >= spec.MEDIA_EXCHANGES_MIN
         and all(ex.get("pattern_en") and ex.get("premise_en") for ex in data.get("media_exchanges", [])),
         f"{len(data.get('media_exchanges', []))} exchanges")
     add_v2("evidence_status_vocab",
-        all(es.get("status") in {"confirmed", "supported", "emerging", "interpretive"}
+        all(es.get("status") in spec.EVIDENCE_STATUSES
             for es in data.get("evidence_statuses", [])),
         f"{len(data.get('evidence_statuses', []))} statuses in vocab")
     add_v2("agenda_labeled",
-        all(t.get("priority") in {"critical", "high", "medium"}
-            and t.get("momentum") in {"accelerating", "rising", "stable", "fading"}
-            and t.get("evidence") in {"strong", "moderate", "emerging"}
+        all(t.get("priority") in spec.PRIORITIES
+            and t.get("momentum") in spec.MOMENTA
+            and t.get("evidence") in spec.EVIDENCE_LEVELS
             for t in data.get("agenda_topics", [])),
         "priority/momentum/evidence labels on all topics")
     add_v2("topic_facts_present", topic_facts_present(data),
@@ -167,7 +169,7 @@ def run_qc(edition_id: str) -> dict:
         "; ".join(fig_diffs[:3]) if fig_diffs else "number sets match",
         blockable=legacy)
     add("exact_report_name",
-        data.get("report_title", "") == "International Financial Media Weekly",
+        data.get("report_title", "") == spec.REPORT_TITLE,
         data.get("report_title", ""))
     add("bilingual_blocks_present",
         bool(data.get("week_summary_en")) and bool(data.get("week_summary_zh")),
