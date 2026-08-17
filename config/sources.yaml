@@ -44,10 +44,33 @@ sources:
     outlet: "CNBC Asia"
     kind: yt_playlist
     playlist_id: ""
-    playlist_url: ""
+    # Channel-level URL works with yt-dlp --flat-playlist; verify on the server
+    # with scripts/verify_sources.py before enabling (captions must clear
+    # fetch.min_transcript_words for full episodes, not clips).
+    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
     title_regex: "Squawk Box Asia.*"
     enabled: false
-    note: "Full-show transcripts not reliably on YouTube (clips only). Re-enable when an episode playlist surfaces."
+    note: "Candidate: CNBC full episodes surface on @CNBCtelevision. Run scripts/verify_sources.py cnbc_squawk_box_asia; enable only on GO."
+
+  - id: cnbc_china_connection
+    name: "The China Connection"
+    outlet: "CNBC Asia"
+    kind: yt_playlist
+    playlist_id: ""
+    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
+    title_regex: "China Connection.*"
+    enabled: false
+    note: "Candidate: verify with scripts/verify_sources.py cnbc_china_connection; enable only on GO."
+
+  - id: cnbc_street_signs_asia
+    name: "Street Signs Asia"
+    outlet: "CNBC Asia"
+    kind: yt_playlist
+    playlist_id: ""
+    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
+    title_regex: "Street Signs Asia.*"
+    enabled: false
+    note: "Candidate: verify with scripts/verify_sources.py cnbc_street_signs_asia; enable only on GO."
 
   - id: wire_markets
     name: "Market News Wire"

@@ -37,6 +37,9 @@ SYSTEM = (
     "one job. "
     "(5) Watchpoints must name a trigger, the possible narrative change, affected areas, and what "
     "would raise its priority. "
+    "(5b) monitored_outlets must list exactly the programmes supplied in the context — "
+    "never name an outlet that was not monitored this week; the report's authority rests "
+    "on its stated sample frame. "
     "(6) Every ZH field must read as natural, idiomatic simplified Chinese written by a "
     "mainland financial-media desk — restructure sentences and collocations rather than "
     "translating EN word-for-word; no English syntax or awkward calques in ZH text. "
@@ -94,7 +97,8 @@ def synthesize_week(start: str, end: str, force: bool = False) -> dict:
         f"first={evidence['first_seen'].get(t, '?')} last={evidence['last_seen'].get(t, '?')}"
         for t, n in list(evidence["topic_counts"].items())[:25])
     user = (
-        f"REPORTING WEEK: {start} to {end}\n\n"
+        f"REPORTING WEEK: {start} to {end}\n"
+        f"MONITORED PROGRAMMES THIS WEEK: {', '.join(_week_outlets(start, end))}\n\n"
         f"## Agenda evidence (topic -> episode mentions)\n"
         f"{json.dumps(evidence['topic_counts'], ensure_ascii=False)[:4000]}\n"
         f"## Coverage evidence (programmes carrying each topic)\n{cov_lines[:4000]}\n"
@@ -257,6 +261,16 @@ def _episode_digest(start: str, end: str) -> str:
         topics = ", ".join(x.get("title", "") for x in json.loads(r["hot_topics_json"] or "[]"))
         lines.append(f"[{r['pub_date']}] {r['show_name']}: {topics[:500]}")
     return "\n".join(lines) or "(no analyses available this week)"
+
+
+def _week_outlets(start: str, end: str) -> list[str]:
+    """Programmes actually monitored this week — the report's sample frame."""
+    with db.conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT show_name FROM episodes "
+            "WHERE pub_date>=? AND pub_date<=? AND show_name IS NOT NULL "
+            "ORDER BY show_name", (start, end)).fetchall()
+    return [r["show_name"] for r in rows if r["show_name"]]
 
 
 def _manifest(start: str, end: str) -> dict:

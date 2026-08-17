@@ -38,6 +38,24 @@ def interviews_csv(edition_id: str) -> str:
     return out.getvalue()
 
 
+def _methodology(edition: dict) -> str:
+    """Methodology text with the sample frame stated up front — the report's
+    claims describe the monitored set, not 'the media' in general."""
+    d = edition["data"]
+    outlets = ", ".join(d.get("monitored_outlets", [])) or "monitored outlets"
+    eps = d.get("episode_count") or len((edition["manifest"] or {}).get("episodes", []))
+    return (
+        f"<p><b>Sample frame:</b> this report monitors {html.escape(outlets)} — "
+        f"{eps} episodes this week — plus wire headlines. Claims about the media "
+        "agenda describe this monitored set, not all financial media.</p>"
+        "<p>Bilingual report synthesised from the week's TV transcripts "
+        "and daily episode analyses; agenda topics are selected dynamically by "
+        "editorial LLM; coverage figures and evidence statuses are computed "
+        "server-side from the episode record, not estimated by the model; "
+        "interview log derives from anchor-guest exchanges, with items marked "
+        "'paraphrase' where wording could not be verified against the transcript.</p>")
+
+
 def print_html(edition: dict) -> str:
     """Full A4 print layout: cover + EN + ZH + appendix."""
     from .email import render_email
@@ -48,10 +66,8 @@ def print_html(edition: dict) -> str:
         + "".join(f"<li>{e.get('date')} · {e.get('program')} · {e.get('file')}</li>"
                   for e in (edition["manifest"] or {}).get("episodes", [])[:40])
         + "</ul>"
-        + '<h2>Methodology</h2><p>Bilingual report synthesised from the week\'s TV transcripts '
-        'and daily episode analyses; agenda topics are selected dynamically by editorial LLM; '
-        'interview log derives from anchor-guest exchanges.</p>'
-        '<h2>QC</h2><pre>' + html.escape(
+        + '<h2>Methodology</h2>' + _methodology(edition)
+        + '<h2>QC</h2><pre>' + html.escape(
             json.dumps(edition.get("qc") or {}, ensure_ascii=False, indent=1)[:2000]) + "</pre>"
     )
     return body + appendix
