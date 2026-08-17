@@ -48,6 +48,11 @@ def _full(v2: bool) -> dict:
             "watchpoints": [{"trigger_en": "w"}] * 3,
             "media_exchanges": [{"pattern_en": "p", "premise_en": "p"}] * 3,
             "evidence_statuses": [{"status": "supported"}] * 2,
+            "pr_counsel": {
+                "risk_en": "r", "risk_zh": "r", "opportunity_en": "o",
+                "opportunity_zh": "o", "prepare_en": "p", "prepare_zh": "p",
+                "avoid_en": "a", "avoid_zh": "a",
+            },
             "week_ahead_events": [
                 {"date": "2026-08-10", "event_en": "BOJ"},
                 {"date": "2026-08-12", "event_en": "CPI"},

@@ -16,6 +16,14 @@ from ..synth import qc
 router = APIRouter()
 
 
+def _public_pipeline(p: dict | None) -> dict | None:
+    """Public pipeline view: stage/status only — internal messages stay admin-side."""
+    if not p:
+        return None
+    return {"stage": p.get("stage"), "status": p.get("status"),
+            "updated_at": p.get("updated_at")}
+
+
 @router.get("/meta")
 def meta():
     latest = db.latest_edition()
@@ -26,7 +34,7 @@ def meta():
     return {"latest": latest["id"] if latest else None,
             "editions": editions,
             "sources": health,
-            "pipeline": db.get_pipeline()}
+            "pipeline": _public_pipeline(db.get_pipeline())}
 
 
 @router.get("/desk")
@@ -101,10 +109,33 @@ def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
     return out
 
 
+def _normalized(s: str) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", (s or "").lower()))
+
+
 def _ticker(interviews: list[dict]) -> list[dict]:
+    """Flagged anchor questions, each verified against the day's transcript.
+
+    Items whose wording cannot be found in the transcript are marked
+    verified=False so the UI can label them as paraphrase instead of
+    presenting editorial inference as a verbatim quote.
+    """
     flagged = [i for i in interviews if (i.get("tone") or "").lower() in ("challenging", "evasive")]
-    return [{"date": i["date"], "show": i["show"], "tone": i["tone"],
-             "question": (i.get("questions") or [""])[0][:160]} for i in flagged[:8]]
+    corpus: dict[tuple, str] = {}
+    out = []
+    for i in flagged[:8]:
+        key = (i.get("show") or "", i.get("date") or "")
+        if key not in corpus:
+            with db.conn() as c:
+                eps = [r["id"] for r in c.execute(
+                    "SELECT id FROM episodes WHERE show_name=? AND pub_date=?", key)]
+            corpus[key] = _normalized(" ".join(db.transcript_for(e) for e in eps))
+        q = (i.get("questions") or [""])[0]
+        snippet = " ".join(_normalized(q).split()[:8])
+        verified = bool(snippet) and snippet in corpus[key]
+        out.append({"date": i["date"], "show": i["show"], "tone": i["tone"],
+                    "question": q[:160], "verified": verified})
+    return out
 
 
 @router.get("/editions")

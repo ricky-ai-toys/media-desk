@@ -48,8 +48,12 @@ def test_legacy_fields_derived_from_v2():
     assert data["recurring_questions_en"] == [
         "Will Tokyo act again?", "Does BOJ confirm?", "Where does JPY settle?"]
     assert data["watchlist_en"] == ["USDJPY above 158"]
-    assert data["pr_counsel"]["risk_en"] == "Calling the staying power theater is risky."
-    assert data["pr_counsel"]["prepare_en"] == "Hedge disclosures"
+    # pr_counsel is never stitched from comms_boxes: missing cells stay empty
+    # and raise a warning; QC's pr_counsel_complete gate handles enforcement.
+    assert data["pr_counsel"]["risk_en"] == ""
+    assert data["pr_counsel"]["prepare_en"] == ""
+    assert data["pr_counsel"]["opportunity_en"] == "SEO"
+    assert any("pr_counsel incomplete" in w for w in data["warnings"])
     ex = data["media_exchanges"][0]
     assert ex["likely_to_recur"] is True
     assert data["evidence_statuses"] == []

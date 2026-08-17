@@ -62,6 +62,7 @@ def agenda_evidence(start: str, end: str) -> dict:
     return {
         "topic_counts": dict(ranked),
         "coverage": {t: len(programmes[t]) for t in counts},
+        "topic_programmes": {t: sorted(p for p in programmes[t] if p) for t in counts},
         "first_seen": {t: min(seen[t]) for t in counts},
         "last_seen": {t: max(seen[t]) for t in counts},
         "source_files": len(rows),

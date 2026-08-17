@@ -1,20 +1,22 @@
 """Weekly bilingual synthesis — the LLM editorial pass (deepseek-v4-flash).
 
 Follows the v5 golden rules: evidence in, ranking by LLM not script,
-EXACTLY 3-5 agenda topics / 3-4 narratives, chunked delegations under
-~2000 words of output each, and no fabrication (transcript-only).
-Schema v2: editorial thesis, labelled priority/momentum/evidence (no
-false-precision headline scores), narrative-driving ("what changed and
-why"), per-story communications boxes, grouped recurring questions,
-media-question patterns, and trigger-based watchpoints. Legacy export
-fields (pr_counsel, watchlist_en/zh, recurring_questions_en/zh) are
-derived here so email/PDF exports stay byte-compatible.
+EXACTLY 3-5 agenda topics / 3-4 narratives, and no fabrication
+(transcript-only). One chat_json call per week; server-computable fields
+(coverage, episode counts, evidence statuses) are overwritten from real
+evidence after the call — the model writes prose, never numbers we can
+compute ourselves. Legacy export fields (pr_counsel, watchlist_en/zh,
+recurring_questions_en/zh) are derived here so email/PDF exports stay
+byte-compatible.
 """
+import datetime
 import json
 
+from .. import config
 from .. import db
 from .. import llm
 from ..analyze.evidence import agenda_evidence, interview_monitor
+from ..tokens import kw, overlap
 
 SYSTEM = (
     "You are the editor of International Financial Media Weekly (no agency branding). "
@@ -100,15 +102,87 @@ def synthesize_week(start: str, end: str, force: bool = False) -> dict:
         f"{json.dumps(monitor['recurring_questions'], ensure_ascii=False)[:2500]}\n\n"
         f"## Daily episode digests\n{digest[:26000]}\n\n{SCHEMA}"
     )
-    data = llm.chat_json(SYSTEM, user, max_tokens=24000)
+    try:
+        data = llm.chat_json(SYSTEM, user, max_tokens=24000)
+    except Exception as e:
+        db.mark_edition_failed(start, end, str(e)[:300])
+        _dump_raw(start, end, {"error": str(e)[:500]})
+        raise
+    _dump_raw(start, end, data)
     data.setdefault("warnings", [])
     data = _derive_legacy(data)
     data["start_date"], data["end_date"] = start, end
-    data["episode_count"] = data.get("episode_count") or evidence["source_files"]
-    data["source_file_count"] = evidence["source_files"]
+    _apply_evidence_overrides(data, evidence)
+    data["evidence_statuses"] = _rule_based_statuses(data)
     edition_id = db.upsert_edition(data, _manifest(start, end), None)
     db.replace_interview_entries(edition_id, _entries(monitor["interview_log"]))
     return {"edition": edition_id, "exists": False, "outlets": data.get("monitored_outlets")}
+
+
+def _dump_raw(start: str, end: str, payload: dict) -> None:
+    """Persist the raw LLM payload for post-hoc audit (PR-facing traceability)."""
+    out_dir = config.ROOT / "data" / "llm_raw"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{start}_to_{end}.json").write_text(
+        json.dumps({"start_date": start, "end_date": end,
+                    "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    "payload": payload}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+
+
+def _apply_evidence_overrides(data: dict, evidence: dict) -> None:
+    """Overwrite every server-computable field with real evidence values.
+
+    The LLM estimates `coverage` (programmes per topic); the live site showed
+    a topic claiming 5/15 coverage while Wire-vs-TV showed zero evidence.
+    Numbers we can compute are never trusted to the model.
+    """
+    data["episode_count"] = evidence["source_files"]
+    data["source_file_count"] = evidence["source_files"]
+    progs = evidence.get("topic_programmes", {})
+    for t in data.get("agenda_topics") or []:
+        k = kw(t.get("title_en", ""))
+        matched: set[str] = set()
+        for hot_topic, shows in progs.items():
+            if k and overlap(k, kw(hot_topic)) >= 0.5:
+                matched |= set(shows)
+        t["coverage"] = len(matched)
+        t["evidence_programmes"] = sorted(matched)
+        if not matched:
+            data.setdefault("warnings", []).append(
+                f"no episode evidence for agenda topic: {(t.get('title_en') or '')[:80]}")
+
+
+def _rule_based_statuses(data: dict) -> list[dict]:
+    """Evidence statuses derived by rules, not self-graded by the LLM.
+
+    Rationale: the model labelled its own unverifiable week-ahead dates
+    'confirmed' on the live site. `confirmed` now requires real grounding;
+    week-ahead events can never exceed `supported` without external
+    verification.
+    """
+    covs = [t.get("coverage") or 0 for t in data.get("agenda_topics") or []]
+    if covs and min(covs) >= 3:
+        agenda_status = "supported"
+    elif covs and min(covs) >= 1:
+        agenda_status = "emerging"
+    else:
+        agenda_status = "interpretive"
+    episodes = data.get("episode_count") or 0
+    return [
+        {"section": "Thesis",
+         "status": "supported" if episodes else "interpretive",
+         "note": f"derived from {episodes} episode digests"},
+        {"section": "Agenda topics",
+         "status": agenda_status,
+         "note": "coverage computed server-side from programme evidence"},
+        {"section": "Narratives",
+         "status": "interpretive",
+         "note": "frames inferred from topic sequencing, not full transcripts"},
+        {"section": "Week ahead events",
+         "status": "supported",
+         "note": "calendar items; dates not externally verified"},
+    ]
 
 
 def _derive_legacy(data: dict) -> dict:
@@ -156,32 +230,17 @@ def _derive_legacy(data: dict) -> dict:
     data.setdefault("evidence_statuses", [])
     data.setdefault("week_ahead_events", [])
 
+    # pr_counsel: never stitched from comms_boxes (mechanically concatenated
+    # client-facing copy is worse than an honest gap). Missing fields stay
+    # empty, raise a warning, and are gated by QC's pr_counsel_complete check.
     pr = data.get("pr_counsel") or {}
-    boxes = data.get("comms_boxes") or []
-    if not (pr.get("risk_en") and pr.get("avoid_en")) and boxes:
-        risks = [b.get("risky_en", "") for b in boxes if b.get("risky_en")]
-        preps = [e for b in boxes for e in (b.get("evidence_to_prepare_en") or []) if e][:3]
-        imps = [b.get("implication_en", "") for b in boxes if b.get("implication_en")]
-        if not pr.get("risk_en"):
-            pr["risk_en"] = risks[0] if risks else (imps[0] if imps else "")
-        if not pr.get("avoid_en"):
-            pr["avoid_en"] = " ".join(risks[:2])
-        if not pr.get("prepare_en"):
-            pr["prepare_en"] = " ".join(preps)
-        if not pr.get("opportunity_en"):
-            pr["opportunity_en"] = imps[-1] if imps else (pr.get("risk_en") or "")
-        rose = data.get("comms_boxes") or []
-        zh_risks = [b.get("risky_zh", "") for b in rose if b.get("risky_zh")]
-        zh_preps = [e for b in rose for e in (b.get("evidence_to_prepare_zh") or []) if e][:3]
-        zh_imps = [b.get("implication_zh", "") for b in rose if b.get("implication_zh")]
-        if not pr.get("risk_zh"):
-            pr["risk_zh"] = zh_risks[0] if zh_risks else (zh_imps[0] if zh_imps else "")
-        if not pr.get("avoid_zh"):
-            pr["avoid_zh"] = " ".join(zh_risks[:2])
-        if not pr.get("prepare_zh"):
-            pr["prepare_zh"] = " ".join(zh_preps)
-        if not pr.get("opportunity_zh"):
-            pr["opportunity_zh"] = zh_imps[-1] if zh_imps else pr.get("risk_zh", "")
+    for k in ("risk_en", "risk_zh", "opportunity_en", "opportunity_zh",
+              "prepare_en", "prepare_zh", "avoid_en", "avoid_zh"):
+        pr.setdefault(k, "")
+    missing = sorted(k for k, v in pr.items() if not v)
+    if missing:
+        data.setdefault("warnings", []).append(
+            "pr_counsel incomplete: " + ", ".join(missing))
     data["pr_counsel"] = pr
 
     return data

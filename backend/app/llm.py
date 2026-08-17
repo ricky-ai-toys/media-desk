@@ -1,10 +1,14 @@
 """DeepSeek (deepseek-v4-flash) OpenAI-compatible client used for all analysis."""
 import json
 import os
+import time
 
 import httpx
 
 from . import config
+
+RETRIES = 3
+_BACKOFF = (1, 4, 16)  # seconds between attempts
 
 SYSTEM_EDITOR = (
     "You are the senior desk analyst for International Financial Media Weekly. "
@@ -23,7 +27,11 @@ def _headers():
 
 def chat(messages: list[dict], json_mode: bool = False, max_tokens: int = 8192,
          temperature: float | None = None) -> str:
-    """Non-streaming completion with optional JSON response."""
+    """Non-streaming completion with optional JSON response.
+
+    Retries transport/API failures with exponential backoff — a weekly
+    synthesis failure must never hinge on a single transient error.
+    """
     payload = {
         "model": config.ANALYSIS["model"],
         "messages": messages,
@@ -35,25 +43,38 @@ def chat(messages: list[dict], json_mode: bool = False, max_tokens: int = 8192,
         payload["temperature"] = temperature
     else:
         payload["temperature"] = config.ANALYSIS["temperature"]
-    with httpx.Client(timeout=600) as client:
-        r = client.post(
-            f"{config.ANALYSIS['base_url']}/chat/completions", headers=_headers(), json=payload)
-        r.raise_for_status()
-        data = r.json()
-        content = data["choices"][0]["message"].get("content") or ""
-        return content
+    last: Exception | None = None
+    for attempt in range(RETRIES):
+        try:
+            with httpx.Client(timeout=600) as client:
+                r = client.post(
+                    f"{config.ANALYSIS['base_url']}/chat/completions",
+                    headers=_headers(), json=payload)
+                r.raise_for_status()
+                data = r.json()
+                return data["choices"][0]["message"].get("content") or ""
+        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
+            last = e
+            if attempt < RETRIES - 1:
+                time.sleep(_BACKOFF[attempt])
+    raise RuntimeError(f"LLM call failed after {RETRIES} attempts: {last}")
 
 
 def chat_json(system: str, user: str, max_tokens: int = 8192) -> dict:
-    """JSON-mode completion; returns parsed object with a raw copy attached."""
-    out = chat([
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ], json_mode=True, max_tokens=max_tokens)
-    try:
-        return json.loads(_strip_fences(out))
-    except json.JSONDecodeError:
-        raise ValueError(f"LLM returned non-JSON: {out[:400]}")
+    """JSON-mode completion; returns parsed object. Malformed JSON is retried."""
+    last: Exception | None = None
+    for attempt in range(RETRIES):
+        out = chat([
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ], json_mode=True, max_tokens=max_tokens)
+        try:
+            return json.loads(_strip_fences(out))
+        except json.JSONDecodeError as e:
+            last = ValueError(f"LLM returned non-JSON: {out[:400]}")
+            if attempt < RETRIES - 1:
+                time.sleep(_BACKOFF[attempt])
+    raise last or ValueError("LLM returned non-JSON")
 
 
 def _strip_fences(text: str) -> str:

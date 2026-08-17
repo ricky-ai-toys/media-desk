@@ -33,7 +33,32 @@ def week_ahead_present(data: dict) -> bool:
             d = _dt.date.fromisoformat(str(e.get("date", "")))
         except ValueError:
             return False
-        if not (lo <= d <= hi) or not e.get("event_en"):
+        # prompt contract: strictly next Monday-Friday — weekends rejected
+        if not (lo <= d <= hi) or d.weekday() >= 5 or not e.get("event_en"):
+            return False
+    return True
+
+
+def pr_counsel_complete(data: dict) -> bool:
+    """All eight PR-counsel cells non-empty (no stitched fallbacks allowed)."""
+    pr = data.get("pr_counsel") or {}
+    return all(pr.get(k) for k in
+               ("risk_en", "risk_zh", "opportunity_en", "opportunity_zh",
+                "prepare_en", "prepare_zh", "avoid_en", "avoid_zh"))
+
+
+def interview_groups_parallel(data: dict) -> bool:
+    """EN and ZH interview-group arrays must be the same length."""
+    en, zh = data.get("interview_groups_en"), data.get("interview_groups_zh")
+    if en is None and zh is None:
+        return True
+    return len(en or []) == len(zh or [])
+
+
+def question_group_items_parallel(data: dict) -> bool:
+    """Each question group must have the same number of EN and ZH questions."""
+    for g in data.get("question_groups") or []:
+        if len(g.get("questions_en") or []) != len(g.get("questions_zh") or []):
             return False
     return True
 
@@ -68,7 +93,9 @@ def run_qc(edition_id: str) -> dict:
                 "thesis_present", "narrative_arc_complete",
                 "watchpoint_triggers_present", "media_exchanges_complete",
                 "evidence_status_vocab", "agenda_labeled",
-                "topic_facts_present", "week_ahead_present")
+                "topic_facts_present", "week_ahead_present",
+                "pr_counsel_complete", "interview_groups_parallel",
+                "question_group_items_parallel")
 
     def add_v2(name, ok, detail):
         add(name, ok if not legacy else True,
@@ -126,9 +153,18 @@ def run_qc(edition_id: str) -> dict:
         f"{len(data.get('agenda_topics', []))} topics with driver/next_test/stakes")
     add_v2("week_ahead_present", week_ahead_present(data),
         f"{len(data.get('week_ahead_events', []))} events in next-week window")
+    add_v2("pr_counsel_complete", pr_counsel_complete(data),
+        "all 8 PR-counsel cells present")
+    add_v2("interview_groups_parallel", interview_groups_parallel(data),
+        f"EN {len(data.get('interview_groups_en') or [])} / "
+        f"ZH {len(data.get('interview_groups_zh') or [])} groups")
+    add_v2("question_group_items_parallel", question_group_items_parallel(data),
+        "EN/ZH question counts equal per group")
     add("terse_lengths", terse_lengths(data),
         "topic summaries within soft length budget", blockable=False)
-    add("en_zh_figures_align", _figures_align(data), "number sets match",
+    fig_diffs = _figure_diffs(data)
+    add("en_zh_figures_align", not fig_diffs,
+        "; ".join(fig_diffs[:3]) if fig_diffs else "number sets match",
         blockable=legacy)
     add("exact_report_name",
         data.get("report_title", "") == "International Financial Media Weekly",
@@ -161,16 +197,57 @@ def run_qc(edition_id: str) -> dict:
 
 
 def _figures_align(data: dict) -> bool:
-    en = _numbers(json.dumps({k: v for k, v in data.items() if k.endswith("_en")}, ensure_ascii=False))
-    zh = _numbers(json.dumps({k: v for k, v in data.items() if k.endswith("_zh")}, ensure_ascii=False))
-    return en == zh
+    return not _figure_diffs(data)
 
 
-# Figures that appear in every edition regardless of content (report dates,
-# common market references) and would always mismatch EN vs ZH. Kept explicit
-# so a false block is easy to trace; extend when a new constant appears.
-_NUM_EXCLUDE = {"13", "17", "7", "2026"}
+def _figure_diffs(data: dict) -> list[str]:
+    """Per-field EN/ZH number-set comparison (recursive over _en/_zh pairs).
+
+    Replaces the old global set comparison: a figure legitimately present in
+    only one language of one field no longer masks — or fakes — alignment
+    elsewhere. Returns human-readable diffs for QC detail.
+    """
+    excluded = _dynamic_excludes(data)
+    diffs = []
+    for path, en_text, zh_text in _paired_texts(data):
+        en = _numbers(en_text, excluded)
+        zh = _numbers(zh_text, excluded)
+        if en != zh:
+            diffs.append(f"{path or '(top)'}: EN {sorted(en)} vs ZH {sorted(zh)}")
+    return diffs
 
 
-def _numbers(s: str) -> set[str]:
-    return {t for t in re.findall(r"\d+", s) if t not in _NUM_EXCLUDE}
+def _paired_texts(obj, path=""):
+    """Yield (path, en_text, zh_text) for every sibling *_en/*_zh pair."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k.endswith("_en") and isinstance(v, str):
+                zk = k[:-3] + "_zh"
+                zh = obj.get(zk)
+                if isinstance(zh, str):
+                    yield (f"{path}.{k[:-3]}" if path else k[:-3], v, zh)
+            else:
+                yield from _paired_texts(v, f"{path}.{k}" if path else k)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            yield from _paired_texts(item, f"{path}[{i}]")
+
+
+def _dynamic_excludes(data: dict) -> set[str]:
+    """Numbers guaranteed to appear regardless of content (report dates and
+    structural constants) — derived from the edition itself, not hardcoded,
+    so the check keeps working when the calendar year rolls over."""
+    ex = {"7"}  # days per week, appears in boilerplate
+    for key in ("start_date", "end_date"):
+        try:
+            d = _dt.date.fromisoformat(str(data.get(key, "")))
+        except ValueError:
+            continue
+        ex.update({str(d.year), str(d.month), str(d.day),
+                   f"{d.month:02d}", f"{d.day:02d}"})
+    return ex
+
+
+def _numbers(s: str, excluded: set[str] | None = None) -> set[str]:
+    excluded = excluded or set()
+    return {t for t in re.findall(r"\d+", s) if t not in excluded}

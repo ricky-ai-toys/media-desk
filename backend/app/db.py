@@ -178,8 +178,31 @@ def init_db():
 
 
 def sync_sources():
+    """Upsert enabled sources; mark sources removed/disabled in yaml as disabled
+    so stale entries (e.g. a dead wire feed) drop out of the public source list."""
+    enabled_ids = set()
     for s in config.SOURCES.values():
         upsert_source(s)
+        enabled_ids.add(s["id"])
+    with conn() as c:
+        if enabled_ids:
+            marks = ",".join("?" for _ in enabled_ids)
+            c.execute(f"UPDATE sources SET enabled=0 WHERE id NOT IN ({marks})",
+                      tuple(enabled_ids))
+        else:
+            c.execute("UPDATE sources SET enabled=0")
+
+
+def upsert_source(source: dict):
+    with conn() as c:
+        c.execute(
+            "INSERT INTO sources (id, name, outlet, kind, cfg_json, enabled) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, outlet=excluded.outlet, "
+            "kind=excluded.kind, cfg_json=excluded.cfg_json, enabled=excluded.enabled",
+            (source["id"], source["name"], source["outlet"], source["kind"],
+             json.dumps(source, ensure_ascii=False),
+             1 if source.get("enabled", True) else 0),
+        )
 
 
 def upsert_pipeline(stage, status, message, target_week=None):
@@ -197,17 +220,6 @@ def get_pipeline():
     with conn() as c:
         row = c.execute("SELECT * FROM pipeline_state WHERE id=1").fetchone()
         return dict(row) if row else None
-
-
-def upsert_source(source: dict):
-    with conn() as c:
-        c.execute(
-            "INSERT INTO sources (id, name, outlet, kind, cfg_json, enabled) VALUES (?,?,?,?,?,?) "
-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, outlet=excluded.outlet, "
-            "kind=excluded.kind, cfg_json=excluded.cfg_json, enabled=excluded.enabled",
-            (source["id"], source["name"], source["outlet"], source["kind"],
-             json.dumps(source, ensure_ascii=False), 1),
-        )
 
 
 def upsert_episode(ep: dict) -> str:
@@ -306,6 +318,20 @@ def upsert_edition(data: dict, manifest: dict | None, qc: dict | None) -> str:
                  g.get("role_en", ""), zh.get("role_zh", ""),
                  json.dumps(g.get("questions_en", []), ensure_ascii=False),
                  json.dumps(zh.get("questions_zh", []), ensure_ascii=False)))
+    return edition_id
+
+
+def mark_edition_failed(start: str, end: str, error: str) -> str:
+    """Record a failed synthesis so the week is visible as failed, not absent."""
+    edition_id = f"{start}_to_{end}"
+    with conn() as c:
+        c.execute(
+            "INSERT INTO editions (id, start_date, end_date, status, data_json, "
+            "manifest_json, qc_json, created_at) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET status='synth_failed'",
+            (edition_id, start, end, "synth_failed",
+             json.dumps({"warnings": [f"synthesis failed: {error}"]}),
+             "{}", "{}", utcnow()))
     return edition_id
 
 
@@ -459,7 +485,8 @@ def interview_entries(edition_id: str | None = None, q: str | None = None,
         return out
 
 
-def source_health() -> list[dict]:
+def source_health(include_disabled: bool = False) -> list[dict]:
+    where = "" if include_disabled else "WHERE s.enabled=1"
     with conn() as c:
         return [dict(r) for r in c.execute(
             "SELECT s.id, s.name, s.outlet, s.kind, "
@@ -467,7 +494,7 @@ def source_health() -> list[dict]:
             "(SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) AS articles, "
             "(SELECT ended_at FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_run, "
             "(SELECT ok FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_ok "
-            "FROM sources s ORDER BY s.kind, s.name")]
+            f"FROM sources s {where} ORDER BY s.kind, s.name")]
 
 
 def coverage_radar(edition_id: str) -> dict:
