@@ -93,9 +93,23 @@ any blocked edition prints its blocks and stays non-published.
 ```bash
 .venv/bin/python -m pytest tests/ -q
 ```
-Requires a seeded `data/media.db` (see above); the suite is read-only and covers
-meta/desk/lifecycle/framing/radar/search/edition/export endpoints, search FTS,
-auth guards and the QC gate.
+The suite is self-contained: `tests/conftest.py` auto-builds a synthetic fixture
+DB via `scripts/make_fixture_db.py` on first run (no production data needed).
+It covers meta/desk/lifecycle/framing/radar/search/edition/export endpoints,
+search FTS, auth guards, the QC gate, synthesis integrity (server-side evidence
+overrides, LLM retry/failure markers) and lifecycle chaining rules.
+
+## Source candidates
+Candidate YouTube sources (e.g. CNBC Asia shows) ship disabled. Verify captions
+and title matching on the server before enabling:
+```bash
+.venv/bin/python scripts/verify_sources.py cnbc_squawk_box_asia
+```
+
+## Report spec
+Section counts, vocabularies and word budgets live in
+`backend/app/synth/report_spec.py` — the single source of truth consumed by
+both the synthesis prompt and the QC gate. Change numbers there, nowhere else.
 
 ## Notes
 - `tls internal` is used at the Caddy vhost until a public DNS record for
