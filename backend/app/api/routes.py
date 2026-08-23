@@ -172,7 +172,7 @@ def wordcloud(eid: str, week: str = "this"):
     if not png:
         raise HTTPException(status_code=404, detail="word cloud unavailable")
     return Response(content=png, media_type="image/png",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "public, max-age=3600"})
 
 
 @router.get("/lifecycle")
