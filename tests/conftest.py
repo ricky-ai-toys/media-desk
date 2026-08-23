@@ -1,8 +1,9 @@
 """Shared pytest setup.
 
 Points the app at a repo-local fixture DB (built on first run by
-scripts/make_fixture_db.py) so the suite runs without production data.
-Tests that need an empty DB monkeypatch config.DB_PATH themselves.
+scripts/make_fixture_db.py) so the suite runs without touching the
+development database (data/media.db). Tests that need an empty DB
+monkeypatch config.DB_PATH themselves.
 """
 import os
 import subprocess
@@ -12,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-_FIXTURE_DB = ROOT / "data" / "media.db"
+_FIXTURE_DB = ROOT / "data" / "fixture-media.db"
 os.environ.setdefault("MEDIA_DESK_ADMIN_TOKEN", "test-token")
 os.environ.setdefault("MEDIA_DESK_DB", str(_FIXTURE_DB))
 os.environ.setdefault("MEDIA_DESK_TRANSCRIPTS", str(ROOT / "data" / "transcripts"))

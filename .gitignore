@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 data/media.db
 data/media.db-*
+data/fixture-media.db
 data/transcripts/
 data/*.pdf
 .loopx/
