@@ -1,0 +1,422 @@
+From 286fabba1577e00dea684b6cc8864c77cd352580 Mon Sep 17 00:00:00 2001
+From: dev <dev@media.desk>
+Date: Mon, 17 Aug 2026 23:37:25 +0800
+Subject: [PATCH 4/5] feat(PR-3): report_spec single source of truth, email v2
+ rendering (momentum badges, ZH watchlist, week-ahead, dedupe), lifecycle
+ chaining floor + phase fix, ticker paraphrase tags, comms teaser dedupe
+
+---
+ backend/app/export/email.py      | 32 ++++++++++++++++++---
+ backend/app/framing/engine.py    | 16 ++++++++---
+ backend/app/synth/qc.py          | 30 ++++++++++----------
+ backend/app/synth/report_spec.py | 48 ++++++++++++++++++++++++++++++++
+ backend/app/synth/weekly.py      | 17 ++++++-----
+ tests/test_lifecycle.py          | 41 +++++++++++++++++++++++++++
+ web/src/lib/api.ts               |  2 ++
+ web/src/views/BriefView.ts       |  7 +++--
+ 8 files changed, 162 insertions(+), 31 deletions(-)
+ create mode 100644 backend/app/synth/report_spec.py
+ create mode 100644 tests/test_lifecycle.py
+
+diff --git a/backend/app/export/email.py b/backend/app/export/email.py
+index a975647..5345828 100644
+--- a/backend/app/export/email.py
++++ b/backend/app/export/email.py
+@@ -83,7 +83,7 @@ def render_email(edition: dict) -> str:
+     srcs = d.get("source_file_count", len(episodes))
+     cards = ""
+     for t in d.get("agenda_topics", []):
+-        badge = t.get("direction", "stable")
++        badge = t.get("direction") or t.get("momentum") or "stable"
+         cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
+ <div class="card-title">{html.escape(t['title_en'])}<span class="badge {html.escape(badge)}">{badge.title()}</span></div>
+ <div class="card-copy">{html.escape(first_sentence(t['summary_en'], 22))}</div></td></tr>"""
+@@ -113,7 +113,7 @@ def render_email(edition: dict) -> str:
+     zh_cards = ""
+     for t in d.get("agenda_topics", []):
+         zh_cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
+-<div class="card-title">{html.escape(t.get('title_zh', ''))}<span class="badge {html.escape(t.get('direction', 'stable'))}">{t.get('direction', 'stable').title()}</span></div>
++<div class="card-title">{html.escape(t.get('title_zh', ''))}<span class="badge {html.escape(t.get('direction') or t.get('momentum') or 'stable')}">{(t.get('direction') or t.get('momentum') or 'stable').title()}</span></div>
+ <div class="card-copy">{html.escape(first_sentence(t.get('summary_zh', ''), 22))}</div></td></tr>"""
+     zh_groups = ""
+     for g in d.get("interview_groups_zh", []):
+@@ -134,9 +134,9 @@ def render_email(edition: dict) -> str:
+ <div class="meta-cell"><b>{html.escape(outlets)}</b>source in this edition</div></div></div>
+ <section><h2>This week's media agenda</h2>
+ <div class="intro">Topics are selected dynamically from the week's coverage — not a standing list.</div>
+-<div class="summary-box"><b>In one sentence:</b> {html.escape(d.get('week_summary_en', ''))}</div>
+ <table class="card-table">{cards}</table></section>
+ <section><h2>Narrative shifts</h2><table class="narrative-table">{nrows}</table></section>
++{_week_ahead(d)}
+ <section><h2>What television interviewers kept asking</h2>{groups}</section>
+ <section><h2>PR counsel</h2>{pr_table}{watch}</section>
+ <div class="lang-banner">中文摘要 · 本节为完整中文编辑版本，并非逐句机械翻译。</div>
+@@ -145,7 +145,7 @@ def render_email(edition: dict) -> str:
+ <section><h2>叙事转向</h2>
+ <table class="narrative-table">{_zh_narratives(d)}</table></section>
+ <section><h2>电视主播反复追问的问题</h2>{zh_groups}</section>
+-<section><h2>公关建议</h2>{_zh_pr(d)}</section>
++<section><h2>公关建议</h2>{_zh_pr(d)}{_zh_watchlist(d)}</section>
+ <div class="footer"><b>PDF attachment:</b> full bilingual report, interview log and methodology appendix.<br>
+ Prepared from the supplied media universe: {html.escape(outlets)} · {d['start_date']} to {d['end_date']}</div>
+ </div></body></html>"""
+@@ -174,6 +174,30 @@ def _zh_pr(d: dict) -> str:
+ <td class="avoid"><h3>需避免</h3>{html.escape(first_sentence(pr.get('avoid_zh', ''), 30))}</td></tr></table>"""
+ 
+ 
++def _week_ahead(d: dict) -> str:
++    """Dated events to watch — omitted entirely when absent (no empty blocks)."""
++    events = d.get("week_ahead_events") or []
++    if not events:
++        return ""
++    rows = "".join(
++        f"<tr><td class='rank'>{html.escape(str(e.get('date', ''))[5:].replace('-', '/'))}</td>"
++        f"<td class='card-body'><div class='card-title'>{html.escape(e.get('event_en', ''))}</div>"
++        f"<div class='card-copy'>{html.escape(e.get('why_en', ''))}</div></td></tr>"
++        for e in events)
++    return ("<section><h2>Week ahead</h2>"
++            "<div class='intro'>Dates are calendar items supplied with the corpus; "
++            "verify against official schedules before acting.</div>"
++            f"<table class='card-table'>{rows}</table></section>")
++
++
++def _zh_watchlist(d: dict) -> str:
++    items = d.get("watchlist_zh") or []
++    if not items:
++        return ""
++    lis = "".join(f"<li>{html.escape(str(w)[:140])}</li>" for w in items)
++    return f"<h3>延续观察清单</h3><ul>{lis}</ul>"
++
++
+ def email_subject(edition: dict) -> str:
+     d = edition["data"]
+     return f"International Financial Media Weekly {d['start_date']} to {d['end_date']}"
+\ No newline at end of file
+diff --git a/backend/app/framing/engine.py b/backend/app/framing/engine.py
+index 048fb39..22f6129 100644
+--- a/backend/app/framing/engine.py
++++ b/backend/app/framing/engine.py
+@@ -16,7 +16,12 @@ from ..tokens import kw, overlap
+ 
+ 
+ def _tracks(topics: list[dict]) -> list[dict]:
+-    """Group agenda_topics rows across editions into lifecycle tracks."""
++    """Group agenda_topics rows across editions into lifecycle tracks.
++
++    Chaining requires BOTH overlap >= 0.5 AND >= 3 shared keywords: short
++    topic titles (4-6 keywords) were merging/splitting on 2-word accidents
++    (the live Hormuz story appeared as two separate tracks).
++    """
+     tracks: list[dict] = []
+     for row in topics:
+         k = kw(row["title_en"])
+@@ -25,7 +30,8 @@ def _tracks(topics: list[dict]) -> list[dict]:
+             s = overlap(tr["_kw"], k)
+             if s > best:
+                 best_i, best = i, s
+-        if best_i is not None and best >= 0.4:
++        if (best_i is not None and best >= 0.5
++                and len(tracks[best_i]["_kw"] & k) >= 3):
+             tracks[best_i]["points"].append(row)
+             tracks[best_i]["_kw"] |= k
+         else:
+@@ -63,9 +69,11 @@ def norm10(score: float) -> float:
+ 
+ 
+ def _phase(pts: list[dict]) -> str:
+-    if len(pts) == 1:
+-        return "new"
+     last = pts[-1].get("direction", "")
++    if len(pts) == 1:
++        # a single-sighting topic already fading is not "new" — it's a one-week
++        # story on its way out (yen intervention showed phase "new" while fading)
++        return "fading" if last in ("fading", "shifting") else "new"
+     if last in ("fading", "shifting"):
+         return "fading"
+     if last in ("rising", "accelerating"):
+diff --git a/backend/app/synth/qc.py b/backend/app/synth/qc.py
+index 2c3aadd..d8a18f4 100644
+--- a/backend/app/synth/qc.py
++++ b/backend/app/synth/qc.py
+@@ -9,6 +9,7 @@ import json
+ import re
+ 
+ from .. import db
++from . import report_spec as spec
+ 
+ LEGAL_BLOCK = ("LOW_CONFIDENCE_BLOCK", "DO_NOT_SEND", "unverified claim in report")
+ 
+@@ -21,7 +22,7 @@ def topic_facts_present(data: dict) -> bool:
+ 
+ def week_ahead_present(data: dict) -> bool:
+     events = data.get("week_ahead_events", [])
+-    if not (3 <= len(events) <= 5):
++    if not (spec.WEEK_AHEAD_RANGE[0] <= len(events) <= spec.WEEK_AHEAD_RANGE[1]):
+         return False
+     try:
+         end = _dt.date.fromisoformat(data["end_date"])
+@@ -67,7 +68,7 @@ def terse_lengths(data: dict) -> bool:
+     topics = data.get("agenda_topics", [])
+     if not topics:
+         return True
+-    over = [t for t in topics if len((t.get("summary_en") or "").split()) > 24]
++    over = [t for t in topics if len((t.get("summary_en") or "").split()) > spec.TERSE_QC_WORDS]
+     return len(over) <= max(1, len(topics) // 5)
+ 
+ 
+@@ -107,12 +108,14 @@ def run_qc(edition_id: str) -> dict:
+         f"{ed['start_date']}..{ed['end_date']}")
+     add("minimum_source_coverage", len(days) >= 4, f"{len(days)} weekdays")
+     add("source_manifest_saved", bool(episodes), f"{len(episodes)} episodes")
+-    add("topics_selected_dynamically", 3 <= len(data.get("agenda_topics", [])) <= 5,
++    add("topics_selected_dynamically",
++        spec.TOPIC_RANGE[0] <= len(data.get("agenda_topics", [])) <= spec.TOPIC_RANGE[1],
+         f"{len(data.get('agenda_topics', []))} topics")
+     add("agenda_structure_complete",
+         all(t.get("title_en") and t.get("summary_en") for t in data.get("agenda_topics", [])),
+         "all topics have title+summary")
+-    add("narratives_3_to_4", 3 <= len(data.get("narratives", [])) <= 4,
++    add("narratives_3_to_4",
++        spec.NARRATIVE_RANGE[0] <= len(data.get("narratives", [])) <= spec.NARRATIVE_RANGE[1],
+         f"{len(data.get('narratives', []))} narratives")
+     add("recurring_questions_present",
+         len(data.get("recurring_questions_en", [])) >= 3 or
+@@ -124,29 +127,28 @@ def run_qc(edition_id: str) -> dict:
+         sum(bool(n.get("driver_en") and n.get("why_en") and n.get("next_test_en"))
+             for n in data.get("narratives", [])) >= 3,
+         ">=3 narratives with driver/why/next_test")
+-    add_v2("comms_boxes_present", len(data.get("comms_boxes", [])) >= 3,
++    add_v2("comms_boxes_present", len(data.get("comms_boxes", [])) >= spec.COMMS_BOXES_MIN,
+         f"{len(data.get('comms_boxes', []))} comms boxes")
+     add_v2("question_group_categories_vocab",
+-        all(g.get("category") in ("policy_credibility", "market_consequences",
+-                                  "corporate_exposure", "narrative_durability")
++        all(g.get("category") in spec.QUESTION_CATEGORIES
+             for g in data.get("question_groups", [])),
+         "categories within vocab")
+     add_v2("watchpoint_triggers_present",
+         all(bool(w.get("trigger_en")) for w in data.get("watchpoints", []))
+-        and 3 <= len(data.get("watchpoints", [])) <= 5,
++        and spec.WATCHPOINT_RANGE[0] <= len(data.get("watchpoints", [])) <= spec.WATCHPOINT_RANGE[1],
+         f"{len(data.get('watchpoints', []))} watchpoints with triggers")
+     add_v2("media_exchanges_complete",
+-        len(data.get("media_exchanges", [])) >= 3
++        len(data.get("media_exchanges", [])) >= spec.MEDIA_EXCHANGES_MIN
+         and all(ex.get("pattern_en") and ex.get("premise_en") for ex in data.get("media_exchanges", [])),
+         f"{len(data.get('media_exchanges', []))} exchanges")
+     add_v2("evidence_status_vocab",
+-        all(es.get("status") in {"confirmed", "supported", "emerging", "interpretive"}
++        all(es.get("status") in spec.EVIDENCE_STATUSES
+             for es in data.get("evidence_statuses", [])),
+         f"{len(data.get('evidence_statuses', []))} statuses in vocab")
+     add_v2("agenda_labeled",
+-        all(t.get("priority") in {"critical", "high", "medium"}
+-            and t.get("momentum") in {"accelerating", "rising", "stable", "fading"}
+-            and t.get("evidence") in {"strong", "moderate", "emerging"}
++        all(t.get("priority") in spec.PRIORITIES
++            and t.get("momentum") in spec.MOMENTA
++            and t.get("evidence") in spec.EVIDENCE_LEVELS
+             for t in data.get("agenda_topics", [])),
+         "priority/momentum/evidence labels on all topics")
+     add_v2("topic_facts_present", topic_facts_present(data),
+@@ -167,7 +169,7 @@ def run_qc(edition_id: str) -> dict:
+         "; ".join(fig_diffs[:3]) if fig_diffs else "number sets match",
+         blockable=legacy)
+     add("exact_report_name",
+-        data.get("report_title", "") == "International Financial Media Weekly",
++        data.get("report_title", "") == spec.REPORT_TITLE,
+         data.get("report_title", ""))
+     add("bilingual_blocks_present",
+         bool(data.get("week_summary_en")) and bool(data.get("week_summary_zh")),
+diff --git a/backend/app/synth/report_spec.py b/backend/app/synth/report_spec.py
+new file mode 100644
+index 0000000..0009648
+--- /dev/null
++++ b/backend/app/synth/report_spec.py
+@@ -0,0 +1,48 @@
++"""Single source of truth for the weekly report spec.
++
++Every count range, vocabulary and word budget lives here exactly once:
++the synthesis prompt (weekly.py) renders from it and the QC gate (qc.py)
++enforces from it. Previously both sides hardcoded their own copies and
++had already drifted (prompt said 22-word summaries, QC tolerated 24).
++
++Change a number here and both sides move together.
++"""
++
++REPORT_TITLE = "International Financial Media Weekly"
++
++# --- section count contracts ------------------------------------------------
++TOPIC_RANGE = (3, 5)           # agenda topics per edition
++NARRATIVE_RANGE = (3, 4)       # narratives per edition
++MEDIA_EXCHANGES_MIN = 3        # at least this many questioning patterns
++WATCHPOINT_RANGE = (3, 5)
++WEEK_AHEAD_RANGE = (3, 5)
++COMMS_BOXES_MIN = 3
++QUESTIONS_PER_GROUP = (3, 5)
++
++# --- controlled vocabularies ------------------------------------------------
++PRIORITIES = ("critical", "high", "medium")
++MOMENTA = ("accelerating", "rising", "stable", "fading")
++EVIDENCE_LEVELS = ("strong", "moderate", "emerging")
++QUESTION_CATEGORIES = ("policy_credibility", "market_consequences",
++                       "corporate_exposure", "narrative_durability")
++EVIDENCE_STATUSES = ("confirmed", "supported", "emerging", "interpretive")
++
++# --- word budgets -----------------------------------------------------------
++THESIS_MAX_WORDS = 25
++SUMMARY_MAX_WORDS = 22         # prompt budget for agenda summaries
++CELL_MAX_WORDS = 10            # driver/why/next_test/stakes/… cells
++COMMS_IMPLICATION_MAX_WORDS = 14
++TERSE_QC_WORDS = 24            # QC tolerance for summaries (prompt - 2 slack)
++
++
++def counts_line() -> str:
++    """The 'EXACTLY …' sentence shared by prompt and documentation."""
++    return (
++        f"EXACTLY {TOPIC_RANGE[0]}-{TOPIC_RANGE[1]} agenda topics, "
++        f"EXACTLY {NARRATIVE_RANGE[0]}-{NARRATIVE_RANGE[1]} narratives, "
++        f"{MEDIA_EXCHANGES_MIN} media_exchanges, "
++        f"{WATCHPOINT_RANGE[0]}-{WATCHPOINT_RANGE[1]} watchpoints, "
++        f"recurring question groups of "
++        f"{QUESTIONS_PER_GROUP[0]}-{QUESTIONS_PER_GROUP[1]} questions each. "
++        "No paragraphs."
++    )
+diff --git a/backend/app/synth/weekly.py b/backend/app/synth/weekly.py
+index 20e0184..2490a07 100644
+--- a/backend/app/synth/weekly.py
++++ b/backend/app/synth/weekly.py
+@@ -18,8 +18,10 @@ from .. import llm
+ from ..analyze.evidence import agenda_evidence, interview_monitor
+ from ..tokens import kw, overlap
+ 
++from . import report_spec as spec
++
+ SYSTEM = (
+-    "You are the editor of International Financial Media Weekly (no agency branding). "
++    f"You are the editor of {spec.REPORT_TITLE} (no agency branding). "
+     "Analyze ONLY the supplied weekly media corpus and its extracted evidence. "
+     "Produce the structured bilingual report JSON. English first, full simplified "
+     "Chinese adaptation for every ZH field. Acronyms (AI, ETF, ADR, CPI) stay as-is. "
+@@ -43,16 +45,17 @@ SYSTEM = (
+     "(6) Every ZH field must read as natural, idiomatic simplified Chinese written by a "
+     "mainland financial-media desk — restructure sentences and collocations rather than "
+     "translating EN word-for-word; no English syntax or awkward calques in ZH text. "
+-    "(7) Write terse. Thesis <= 25 words. Each agenda summary is ONE sentence of <= 22 words. "
+-    "Each comms implication <= 14 words. Every cell field (driver, why, next_test, stakes, shift, "
+-    "affected, priority_raises, premise, response, lesson) <= 10 words, telegraphic, no lists. "
++    f"(7) Write terse. Thesis <= {spec.THESIS_MAX_WORDS} words. Each agenda summary is ONE "
++    f"sentence of <= {spec.SUMMARY_MAX_WORDS} words. "
++    f"Each comms implication <= {spec.COMMS_IMPLICATION_MAX_WORDS} words. Every cell field "
++    f"(driver, why, next_test, stakes, shift, affected, priority_raises, premise, response, "
++    f"lesson) <= {spec.CELL_MAX_WORDS} words, telegraphic, no lists. "
+     "ZH fields obey the same brevity. "
+     "(8) week_ahead_events must be 3-5 real, dated events strictly AFTER the reporting week "
+     "(next Monday-Friday), each with a one-clause why-it-matters; never invent dates or events "
+     "not supported by the corpus or universally known calendar items (policy meetings, data "
+     "releases, earnings, deadlines). "
+-    "EXACTLY 3-5 agenda topics, EXACTLY 3-4 narratives, 3 media_exchanges, 3-5 watchpoints, "
+-    "recurring question groups of 3-5 questions each. No paragraphs."
++    + spec.counts_line()
+ )
+ 
+ SCHEMA = (
+@@ -192,7 +195,7 @@ def _rule_based_statuses(data: dict) -> list[dict]:
+ def _derive_legacy(data: dict) -> dict:
+     """Schema v2 superset -> v1-compatible fields (email/PDF/QC keep working).
+     Also guarantees week_summary (thesis) and repeated-count stability."""
+-    data["report_title"] = "International Financial Media Weekly"
++    data["report_title"] = spec.REPORT_TITLE
+     if not data.get("thesis_en"):
+         data["thesis_en"] = data.get("week_summary_en", "")
+     if not data.get("thesis_zh"):
+diff --git a/tests/test_lifecycle.py b/tests/test_lifecycle.py
+new file mode 100644
+index 0000000..828b923
+--- /dev/null
++++ b/tests/test_lifecycle.py
+@@ -0,0 +1,41 @@
++"""Lifecycle chaining rules: threshold + intersection floor, single-point phase."""
++import os
++import sys
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
++
++from backend.app.framing import engine  # noqa: E402
++
++
++def _row(title, edition, direction="rising", rank=1, score=80):
++    return {"title_en": title, "title_zh": "", "edition_id": edition,
++            "end_date": edition.split("_to_")[1], "rank": rank,
++            "direction": direction, "score": score}
++
++
++def test_single_point_fading_is_not_new():
++    pts = [{"direction": "fading"}]
++    assert engine._phase(pts) == "fading"
++    assert engine._phase([{"direction": "rising"}]) == "new"
++    assert engine._phase([{"direction": ""}]) == "new"
++
++
++def test_tracks_chain_on_strong_overlap():
++    rows = [
++        _row("Hormuz shipping risk lifts oil prices", "2026-08-03_to_2026-08-07"),
++        _row("Hormuz shipping risk lifts oil further", "2026-08-10_to_2026-08-14"),
++    ]
++    tracks = engine._tracks(rows)
++    assert len(tracks) == 1 and tracks[0]["week_count"] == 2
++
++
++def test_tracks_reject_two_keyword_accidents():
++    """Only 2 shared keywords on short titles must NOT chain (the live bug:
++    the Hormuz story split into two tracks / unrelated stories merged)."""
++    rows = [
++        _row("Korea chip rally leverage", "2026-08-03_to_2026-08-07"),
++        _row("Korea retail leverage fears", "2026-08-10_to_2026-08-14"),
++    ]
++    tracks = engine._tracks(rows)
++    # 'korea', 'leverage' shared = 2 words, overlap high but intersection < 3
++    assert len(tracks) == 2
+diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
+index 9e3da91..5a8a039 100644
+--- a/web/src/lib/api.ts
++++ b/web/src/lib/api.ts
+@@ -149,6 +149,8 @@ export interface TickerItem {
+   show?: string;
+   tone?: string;
+   question?: string;
++  /** false when the wording was not found verbatim in the transcript */
++  verified?: boolean;
+ }
+ 
+ export interface PressureItem {
+diff --git a/web/src/views/BriefView.ts b/web/src/views/BriefView.ts
+index 3524605..07f4f26 100644
+--- a/web/src/views/BriefView.ts
++++ b/web/src/views/BriefView.ts
+@@ -205,7 +205,8 @@ function commsCards(dd: DeskData): string {
+             <b class="comms-title">${esc(pick(b.title_en, b.title_zh) || "—")}</b>
+             <span class="comms-teaser">${esc(clip(pick(b.implication_en, b.implication_zh), 9))}</span>
+           </summary>
+-          <p class="implication">${esc(clip(pick(b.implication_en, b.implication_zh), 14))}</p>
++          ${(pick(b.implication_en, b.implication_zh) || "").split(/\s+/).length > 9
++            ? `<p class="implication">${esc(clip(pick(b.implication_en, b.implication_zh), 14))}</p>` : ""}
+           ${Q.length ? `<span class="chunk-label" aria-hidden="true"></span><div class="chunk">${Q.map((q) => `<span class="chip">${esc(clip(q, 10))}</span>`).join("")}</div>` : ""}
+           ${E.length ? `<span class="chunk-label ev" aria-hidden="true"></span><div class="chunk ev">${E.map((e) => `<span class="chip">${esc(clip(e, 10))}</span>`).join("")}</div>` : ""}
+           ${b.risky_en ? `<div class="risky">${esc(L("Watch your tone", "注意表述"))} — ${esc(clip(pick(b.risky_en, b.risky_zh), 40))}</div>` : ""}
+@@ -340,9 +341,11 @@ function tickerBlock(ticker: TickerItem[]): string {
+     .map((x) => {
+       const d = (x.date || "").slice(5);
+       const tone = x.tone ? TONE_CLS[x.tone.toLowerCase()] || "tone-neutral" : "tone-neutral";
++      const paraphrase = x.verified === false
++        ? ` <span class="tag emerging">${esc(L("paraphrase", "转述"))}</span>` : "";
+       return `
+       <div class="tick">
+-        <span class="s">${d ? esc(d) : ""}${x.show ? ` · ${esc(x.show)}` : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i></span>
++        <span class="s">${d ? esc(d) : ""}${x.show ? ` · ${esc(x.show)}` : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i>${paraphrase}</span>
+         <p>${esc(clip(x.question, 14))}</p>
+       </div>`;
+     })
+-- 
+2.43.0
+

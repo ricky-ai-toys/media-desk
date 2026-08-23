@@ -13,3 +13,5 @@ data/*.pdf
 run/
 web/node_modules/
 web/static/dist/
+.superpowers/
+core_logic_for_review.zip

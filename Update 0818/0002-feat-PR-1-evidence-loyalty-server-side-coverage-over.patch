@@ -1,0 +1,939 @@
+From dc1c046e175f12bcc700d293ab338b0f0e6d7218 Mon Sep 17 00:00:00 2001
+From: dev <dev@media.desk>
+Date: Mon, 17 Aug 2026 23:24:18 +0800
+Subject: [PATCH 2/5] =?UTF-8?q?feat(PR-1):=20evidence=20loyalty=20?=
+ =?UTF-8?q?=E2=80=94=20server-side=20coverage=20override,=20rule-based=20e?=
+ =?UTF-8?q?vidence=20statuses,=20LLM=20retry+raw=20dump+synth=5Ffailed,=20?=
+ =?UTF-8?q?pr=5Fcounsel=20no-stitch=20gate,=20per-field=20figure=20diffs,?=
+ =?UTF-8?q?=20quote=20verification,=20source=20enable/disable=20hygiene,?=
+ =?UTF-8?q?=20public=20pipeline=20trim?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/app/analyze/evidence.py   |   1 +
+ backend/app/api/routes.py         |  37 +++-
+ backend/app/db.py                 |  53 ++++--
+ backend/app/llm.py                |  55 ++++--
+ backend/app/synth/qc.py           | 105 +++++++++--
+ backend/app/synth/weekly.py       | 131 +++++++++----
+ tests/test_qc_v2.py               |   5 +
+ tests/test_synthesis_integrity.py | 300 ++++++++++++++++++++++++++++++
+ tests/test_weekly_derive.py       |   8 +-
+ 9 files changed, 610 insertions(+), 85 deletions(-)
+ create mode 100644 tests/test_synthesis_integrity.py
+
+diff --git a/backend/app/analyze/evidence.py b/backend/app/analyze/evidence.py
+index 2fc7b21..9c203ea 100644
+--- a/backend/app/analyze/evidence.py
++++ b/backend/app/analyze/evidence.py
+@@ -62,6 +62,7 @@ def agenda_evidence(start: str, end: str) -> dict:
+     return {
+         "topic_counts": dict(ranked),
+         "coverage": {t: len(programmes[t]) for t in counts},
++        "topic_programmes": {t: sorted(p for p in programmes[t] if p) for t in counts},
+         "first_seen": {t: min(seen[t]) for t in counts},
+         "last_seen": {t: max(seen[t]) for t in counts},
+         "source_files": len(rows),
+diff --git a/backend/app/api/routes.py b/backend/app/api/routes.py
+index 7491662..4996ed1 100644
+--- a/backend/app/api/routes.py
++++ b/backend/app/api/routes.py
+@@ -16,6 +16,14 @@ from ..synth import qc
+ router = APIRouter()
+ 
+ 
++def _public_pipeline(p: dict | None) -> dict | None:
++    """Public pipeline view: stage/status only — internal messages stay admin-side."""
++    if not p:
++        return None
++    return {"stage": p.get("stage"), "status": p.get("status"),
++            "updated_at": p.get("updated_at")}
++
++
+ @router.get("/meta")
+ def meta():
+     latest = db.latest_edition()
+@@ -26,7 +34,7 @@ def meta():
+     return {"latest": latest["id"] if latest else None,
+             "editions": editions,
+             "sources": health,
+-            "pipeline": db.get_pipeline()}
++            "pipeline": _public_pipeline(db.get_pipeline())}
+ 
+ 
+ @router.get("/desk")
+@@ -101,10 +109,33 @@ def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
+     return out
+ 
+ 
++def _normalized(s: str) -> str:
++    return " ".join(re.findall(r"[a-z0-9]+", (s or "").lower()))
++
++
+ def _ticker(interviews: list[dict]) -> list[dict]:
++    """Flagged anchor questions, each verified against the day's transcript.
++
++    Items whose wording cannot be found in the transcript are marked
++    verified=False so the UI can label them as paraphrase instead of
++    presenting editorial inference as a verbatim quote.
++    """
+     flagged = [i for i in interviews if (i.get("tone") or "").lower() in ("challenging", "evasive")]
+-    return [{"date": i["date"], "show": i["show"], "tone": i["tone"],
+-             "question": (i.get("questions") or [""])[0][:160]} for i in flagged[:8]]
++    corpus: dict[tuple, str] = {}
++    out = []
++    for i in flagged[:8]:
++        key = (i.get("show") or "", i.get("date") or "")
++        if key not in corpus:
++            with db.conn() as c:
++                eps = [r["id"] for r in c.execute(
++                    "SELECT id FROM episodes WHERE show_name=? AND pub_date=?", key)]
++            corpus[key] = _normalized(" ".join(db.transcript_for(e) for e in eps))
++        q = (i.get("questions") or [""])[0]
++        snippet = " ".join(_normalized(q).split()[:8])
++        verified = bool(snippet) and snippet in corpus[key]
++        out.append({"date": i["date"], "show": i["show"], "tone": i["tone"],
++                    "question": q[:160], "verified": verified})
++    return out
+ 
+ 
+ @router.get("/editions")
+diff --git a/backend/app/db.py b/backend/app/db.py
+index cab5d91..e19d8bc 100644
+--- a/backend/app/db.py
++++ b/backend/app/db.py
+@@ -178,8 +178,31 @@ def init_db():
+ 
+ 
+ def sync_sources():
++    """Upsert enabled sources; mark sources removed/disabled in yaml as disabled
++    so stale entries (e.g. a dead wire feed) drop out of the public source list."""
++    enabled_ids = set()
+     for s in config.SOURCES.values():
+         upsert_source(s)
++        enabled_ids.add(s["id"])
++    with conn() as c:
++        if enabled_ids:
++            marks = ",".join("?" for _ in enabled_ids)
++            c.execute(f"UPDATE sources SET enabled=0 WHERE id NOT IN ({marks})",
++                      tuple(enabled_ids))
++        else:
++            c.execute("UPDATE sources SET enabled=0")
++
++
++def upsert_source(source: dict):
++    with conn() as c:
++        c.execute(
++            "INSERT INTO sources (id, name, outlet, kind, cfg_json, enabled) VALUES (?,?,?,?,?,?) "
++            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, outlet=excluded.outlet, "
++            "kind=excluded.kind, cfg_json=excluded.cfg_json, enabled=excluded.enabled",
++            (source["id"], source["name"], source["outlet"], source["kind"],
++             json.dumps(source, ensure_ascii=False),
++             1 if source.get("enabled", True) else 0),
++        )
+ 
+ 
+ def upsert_pipeline(stage, status, message, target_week=None):
+@@ -199,17 +222,6 @@ def get_pipeline():
+         return dict(row) if row else None
+ 
+ 
+-def upsert_source(source: dict):
+-    with conn() as c:
+-        c.execute(
+-            "INSERT INTO sources (id, name, outlet, kind, cfg_json, enabled) VALUES (?,?,?,?,?,?) "
+-            "ON CONFLICT(id) DO UPDATE SET name=excluded.name, outlet=excluded.outlet, "
+-            "kind=excluded.kind, cfg_json=excluded.cfg_json, enabled=excluded.enabled",
+-            (source["id"], source["name"], source["outlet"], source["kind"],
+-             json.dumps(source, ensure_ascii=False), 1),
+-        )
+-
+-
+ def upsert_episode(ep: dict) -> str:
+     with conn() as c:
+         c.execute(
+@@ -309,6 +321,20 @@ def upsert_edition(data: dict, manifest: dict | None, qc: dict | None) -> str:
+     return edition_id
+ 
+ 
++def mark_edition_failed(start: str, end: str, error: str) -> str:
++    """Record a failed synthesis so the week is visible as failed, not absent."""
++    edition_id = f"{start}_to_{end}"
++    with conn() as c:
++        c.execute(
++            "INSERT INTO editions (id, start_date, end_date, status, data_json, "
++            "manifest_json, qc_json, created_at) VALUES (?,?,?,?,?,?,?,?) "
++            "ON CONFLICT(id) DO UPDATE SET status='synth_failed'",
++            (edition_id, start, end, "synth_failed",
++             json.dumps({"warnings": [f"synthesis failed: {error}"]}),
++             "{}", "{}", utcnow()))
++    return edition_id
++
++
+ def replace_interview_entries(edition_id: str, entries: list[dict]):
+     with conn() as c:
+         c.execute("DELETE FROM interview_entries WHERE edition_id=?", (edition_id,))
+@@ -459,7 +485,8 @@ def interview_entries(edition_id: str | None = None, q: str | None = None,
+         return out
+ 
+ 
+-def source_health() -> list[dict]:
++def source_health(include_disabled: bool = False) -> list[dict]:
++    where = "" if include_disabled else "WHERE s.enabled=1"
+     with conn() as c:
+         return [dict(r) for r in c.execute(
+             "SELECT s.id, s.name, s.outlet, s.kind, "
+@@ -467,7 +494,7 @@ def source_health() -> list[dict]:
+             "(SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) AS articles, "
+             "(SELECT ended_at FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_run, "
+             "(SELECT ok FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_ok "
+-            "FROM sources s ORDER BY s.kind, s.name")]
++            f"FROM sources s {where} ORDER BY s.kind, s.name")]
+ 
+ 
+ def coverage_radar(edition_id: str) -> dict:
+diff --git a/backend/app/llm.py b/backend/app/llm.py
+index bee5cf2..632faa7 100644
+--- a/backend/app/llm.py
++++ b/backend/app/llm.py
+@@ -1,11 +1,15 @@
+ """DeepSeek (deepseek-v4-flash) OpenAI-compatible client used for all analysis."""
+ import json
+ import os
++import time
+ 
+ import httpx
+ 
+ from . import config
+ 
++RETRIES = 3
++_BACKOFF = (1, 4, 16)  # seconds between attempts
++
+ SYSTEM_EDITOR = (
+     "You are the senior desk analyst for International Financial Media Weekly. "
+     "Work only from provided source material. Never invent quotes, names, or facts. "
+@@ -23,7 +27,11 @@ def _headers():
+ 
+ def chat(messages: list[dict], json_mode: bool = False, max_tokens: int = 8192,
+          temperature: float | None = None) -> str:
+-    """Non-streaming completion with optional JSON response."""
++    """Non-streaming completion with optional JSON response.
++
++    Retries transport/API failures with exponential backoff — a weekly
++    synthesis failure must never hinge on a single transient error.
++    """
+     payload = {
+         "model": config.ANALYSIS["model"],
+         "messages": messages,
+@@ -35,25 +43,38 @@ def chat(messages: list[dict], json_mode: bool = False, max_tokens: int = 8192,
+         payload["temperature"] = temperature
+     else:
+         payload["temperature"] = config.ANALYSIS["temperature"]
+-    with httpx.Client(timeout=600) as client:
+-        r = client.post(
+-            f"{config.ANALYSIS['base_url']}/chat/completions", headers=_headers(), json=payload)
+-        r.raise_for_status()
+-        data = r.json()
+-        content = data["choices"][0]["message"].get("content") or ""
+-        return content
++    last: Exception | None = None
++    for attempt in range(RETRIES):
++        try:
++            with httpx.Client(timeout=600) as client:
++                r = client.post(
++                    f"{config.ANALYSIS['base_url']}/chat/completions",
++                    headers=_headers(), json=payload)
++                r.raise_for_status()
++                data = r.json()
++                return data["choices"][0]["message"].get("content") or ""
++        except (httpx.HTTPError, KeyError, IndexError, json.JSONDecodeError) as e:
++            last = e
++            if attempt < RETRIES - 1:
++                time.sleep(_BACKOFF[attempt])
++    raise RuntimeError(f"LLM call failed after {RETRIES} attempts: {last}")
+ 
+ 
+ def chat_json(system: str, user: str, max_tokens: int = 8192) -> dict:
+-    """JSON-mode completion; returns parsed object with a raw copy attached."""
+-    out = chat([
+-        {"role": "system", "content": system},
+-        {"role": "user", "content": user},
+-    ], json_mode=True, max_tokens=max_tokens)
+-    try:
+-        return json.loads(_strip_fences(out))
+-    except json.JSONDecodeError:
+-        raise ValueError(f"LLM returned non-JSON: {out[:400]}")
++    """JSON-mode completion; returns parsed object. Malformed JSON is retried."""
++    last: Exception | None = None
++    for attempt in range(RETRIES):
++        out = chat([
++            {"role": "system", "content": system},
++            {"role": "user", "content": user},
++        ], json_mode=True, max_tokens=max_tokens)
++        try:
++            return json.loads(_strip_fences(out))
++        except json.JSONDecodeError as e:
++            last = ValueError(f"LLM returned non-JSON: {out[:400]}")
++            if attempt < RETRIES - 1:
++                time.sleep(_BACKOFF[attempt])
++    raise last or ValueError("LLM returned non-JSON")
+ 
+ 
+ def _strip_fences(text: str) -> str:
+diff --git a/backend/app/synth/qc.py b/backend/app/synth/qc.py
+index 0c38b80..2c3aadd 100644
+--- a/backend/app/synth/qc.py
++++ b/backend/app/synth/qc.py
+@@ -33,7 +33,32 @@ def week_ahead_present(data: dict) -> bool:
+             d = _dt.date.fromisoformat(str(e.get("date", "")))
+         except ValueError:
+             return False
+-        if not (lo <= d <= hi) or not e.get("event_en"):
++        # prompt contract: strictly next Monday-Friday — weekends rejected
++        if not (lo <= d <= hi) or d.weekday() >= 5 or not e.get("event_en"):
++            return False
++    return True
++
++
++def pr_counsel_complete(data: dict) -> bool:
++    """All eight PR-counsel cells non-empty (no stitched fallbacks allowed)."""
++    pr = data.get("pr_counsel") or {}
++    return all(pr.get(k) for k in
++               ("risk_en", "risk_zh", "opportunity_en", "opportunity_zh",
++                "prepare_en", "prepare_zh", "avoid_en", "avoid_zh"))
++
++
++def interview_groups_parallel(data: dict) -> bool:
++    """EN and ZH interview-group arrays must be the same length."""
++    en, zh = data.get("interview_groups_en"), data.get("interview_groups_zh")
++    if en is None and zh is None:
++        return True
++    return len(en or []) == len(zh or [])
++
++
++def question_group_items_parallel(data: dict) -> bool:
++    """Each question group must have the same number of EN and ZH questions."""
++    for g in data.get("question_groups") or []:
++        if len(g.get("questions_en") or []) != len(g.get("questions_zh") or []):
+             return False
+     return True
+ 
+@@ -68,7 +93,9 @@ def run_qc(edition_id: str) -> dict:
+                 "thesis_present", "narrative_arc_complete",
+                 "watchpoint_triggers_present", "media_exchanges_complete",
+                 "evidence_status_vocab", "agenda_labeled",
+-                "topic_facts_present", "week_ahead_present")
++                "topic_facts_present", "week_ahead_present",
++                "pr_counsel_complete", "interview_groups_parallel",
++                "question_group_items_parallel")
+ 
+     def add_v2(name, ok, detail):
+         add(name, ok if not legacy else True,
+@@ -126,9 +153,18 @@ def run_qc(edition_id: str) -> dict:
+         f"{len(data.get('agenda_topics', []))} topics with driver/next_test/stakes")
+     add_v2("week_ahead_present", week_ahead_present(data),
+         f"{len(data.get('week_ahead_events', []))} events in next-week window")
++    add_v2("pr_counsel_complete", pr_counsel_complete(data),
++        "all 8 PR-counsel cells present")
++    add_v2("interview_groups_parallel", interview_groups_parallel(data),
++        f"EN {len(data.get('interview_groups_en') or [])} / "
++        f"ZH {len(data.get('interview_groups_zh') or [])} groups")
++    add_v2("question_group_items_parallel", question_group_items_parallel(data),
++        "EN/ZH question counts equal per group")
+     add("terse_lengths", terse_lengths(data),
+         "topic summaries within soft length budget", blockable=False)
+-    add("en_zh_figures_align", _figures_align(data), "number sets match",
++    fig_diffs = _figure_diffs(data)
++    add("en_zh_figures_align", not fig_diffs,
++        "; ".join(fig_diffs[:3]) if fig_diffs else "number sets match",
+         blockable=legacy)
+     add("exact_report_name",
+         data.get("report_title", "") == "International Financial Media Weekly",
+@@ -161,16 +197,57 @@ def run_qc(edition_id: str) -> dict:
+ 
+ 
+ def _figures_align(data: dict) -> bool:
+-    en = _numbers(json.dumps({k: v for k, v in data.items() if k.endswith("_en")}, ensure_ascii=False))
+-    zh = _numbers(json.dumps({k: v for k, v in data.items() if k.endswith("_zh")}, ensure_ascii=False))
+-    return en == zh
+-
+-
+-# Figures that appear in every edition regardless of content (report dates,
+-# common market references) and would always mismatch EN vs ZH. Kept explicit
+-# so a false block is easy to trace; extend when a new constant appears.
+-_NUM_EXCLUDE = {"13", "17", "7", "2026"}
++    return not _figure_diffs(data)
++
++
++def _figure_diffs(data: dict) -> list[str]:
++    """Per-field EN/ZH number-set comparison (recursive over _en/_zh pairs).
++
++    Replaces the old global set comparison: a figure legitimately present in
++    only one language of one field no longer masks — or fakes — alignment
++    elsewhere. Returns human-readable diffs for QC detail.
++    """
++    excluded = _dynamic_excludes(data)
++    diffs = []
++    for path, en_text, zh_text in _paired_texts(data):
++        en = _numbers(en_text, excluded)
++        zh = _numbers(zh_text, excluded)
++        if en != zh:
++            diffs.append(f"{path or '(top)'}: EN {sorted(en)} vs ZH {sorted(zh)}")
++    return diffs
++
++
++def _paired_texts(obj, path=""):
++    """Yield (path, en_text, zh_text) for every sibling *_en/*_zh pair."""
++    if isinstance(obj, dict):
++        for k, v in obj.items():
++            if k.endswith("_en") and isinstance(v, str):
++                zk = k[:-3] + "_zh"
++                zh = obj.get(zk)
++                if isinstance(zh, str):
++                    yield (f"{path}.{k[:-3]}" if path else k[:-3], v, zh)
++            else:
++                yield from _paired_texts(v, f"{path}.{k}" if path else k)
++    elif isinstance(obj, list):
++        for i, item in enumerate(obj):
++            yield from _paired_texts(item, f"{path}[{i}]")
++
++
++def _dynamic_excludes(data: dict) -> set[str]:
++    """Numbers guaranteed to appear regardless of content (report dates and
++    structural constants) — derived from the edition itself, not hardcoded,
++    so the check keeps working when the calendar year rolls over."""
++    ex = {"7"}  # days per week, appears in boilerplate
++    for key in ("start_date", "end_date"):
++        try:
++            d = _dt.date.fromisoformat(str(data.get(key, "")))
++        except ValueError:
++            continue
++        ex.update({str(d.year), str(d.month), str(d.day),
++                   f"{d.month:02d}", f"{d.day:02d}"})
++    return ex
+ 
+ 
+-def _numbers(s: str) -> set[str]:
+-    return {t for t in re.findall(r"\d+", s) if t not in _NUM_EXCLUDE}
+\ No newline at end of file
++def _numbers(s: str, excluded: set[str] | None = None) -> set[str]:
++    excluded = excluded or set()
++    return {t for t in re.findall(r"\d+", s) if t not in excluded}
+\ No newline at end of file
+diff --git a/backend/app/synth/weekly.py b/backend/app/synth/weekly.py
+index bf4c9c0..ac356ba 100644
+--- a/backend/app/synth/weekly.py
++++ b/backend/app/synth/weekly.py
+@@ -1,20 +1,22 @@
+ """Weekly bilingual synthesis — the LLM editorial pass (deepseek-v4-flash).
+ 
+ Follows the v5 golden rules: evidence in, ranking by LLM not script,
+-EXACTLY 3-5 agenda topics / 3-4 narratives, chunked delegations under
+-~2000 words of output each, and no fabrication (transcript-only).
+-Schema v2: editorial thesis, labelled priority/momentum/evidence (no
+-false-precision headline scores), narrative-driving ("what changed and
+-why"), per-story communications boxes, grouped recurring questions,
+-media-question patterns, and trigger-based watchpoints. Legacy export
+-fields (pr_counsel, watchlist_en/zh, recurring_questions_en/zh) are
+-derived here so email/PDF exports stay byte-compatible.
++EXACTLY 3-5 agenda topics / 3-4 narratives, and no fabrication
++(transcript-only). One chat_json call per week; server-computable fields
++(coverage, episode counts, evidence statuses) are overwritten from real
++evidence after the call — the model writes prose, never numbers we can
++compute ourselves. Legacy export fields (pr_counsel, watchlist_en/zh,
++recurring_questions_en/zh) are derived here so email/PDF exports stay
++byte-compatible.
+ """
++import datetime
+ import json
+ 
++from .. import config
+ from .. import db
+ from .. import llm
+ from ..analyze.evidence import agenda_evidence, interview_monitor
++from ..tokens import kw, overlap
+ 
+ SYSTEM = (
+     "You are the editor of International Financial Media Weekly (no agency branding). "
+@@ -100,17 +102,89 @@ def synthesize_week(start: str, end: str, force: bool = False) -> dict:
+         f"{json.dumps(monitor['recurring_questions'], ensure_ascii=False)[:2500]}\n\n"
+         f"## Daily episode digests\n{digest[:26000]}\n\n{SCHEMA}"
+     )
+-    data = llm.chat_json(SYSTEM, user, max_tokens=24000)
++    try:
++        data = llm.chat_json(SYSTEM, user, max_tokens=24000)
++    except Exception as e:
++        db.mark_edition_failed(start, end, str(e)[:300])
++        _dump_raw(start, end, {"error": str(e)[:500]})
++        raise
++    _dump_raw(start, end, data)
+     data.setdefault("warnings", [])
+     data = _derive_legacy(data)
+     data["start_date"], data["end_date"] = start, end
+-    data["episode_count"] = data.get("episode_count") or evidence["source_files"]
+-    data["source_file_count"] = evidence["source_files"]
++    _apply_evidence_overrides(data, evidence)
++    data["evidence_statuses"] = _rule_based_statuses(data)
+     edition_id = db.upsert_edition(data, _manifest(start, end), None)
+     db.replace_interview_entries(edition_id, _entries(monitor["interview_log"]))
+     return {"edition": edition_id, "exists": False, "outlets": data.get("monitored_outlets")}
+ 
+ 
++def _dump_raw(start: str, end: str, payload: dict) -> None:
++    """Persist the raw LLM payload for post-hoc audit (PR-facing traceability)."""
++    out_dir = config.ROOT / "data" / "llm_raw"
++    out_dir.mkdir(parents=True, exist_ok=True)
++    (out_dir / f"{start}_to_{end}.json").write_text(
++        json.dumps({"start_date": start, "end_date": end,
++                    "saved_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
++                    "payload": payload}, ensure_ascii=False, indent=1),
++        encoding="utf-8")
++
++
++def _apply_evidence_overrides(data: dict, evidence: dict) -> None:
++    """Overwrite every server-computable field with real evidence values.
++
++    The LLM estimates `coverage` (programmes per topic); the live site showed
++    a topic claiming 5/15 coverage while Wire-vs-TV showed zero evidence.
++    Numbers we can compute are never trusted to the model.
++    """
++    data["episode_count"] = evidence["source_files"]
++    data["source_file_count"] = evidence["source_files"]
++    progs = evidence.get("topic_programmes", {})
++    for t in data.get("agenda_topics") or []:
++        k = kw(t.get("title_en", ""))
++        matched: set[str] = set()
++        for hot_topic, shows in progs.items():
++            if k and overlap(k, kw(hot_topic)) >= 0.5:
++                matched |= set(shows)
++        t["coverage"] = len(matched)
++        t["evidence_programmes"] = sorted(matched)
++        if not matched:
++            data.setdefault("warnings", []).append(
++                f"no episode evidence for agenda topic: {(t.get('title_en') or '')[:80]}")
++
++
++def _rule_based_statuses(data: dict) -> list[dict]:
++    """Evidence statuses derived by rules, not self-graded by the LLM.
++
++    Rationale: the model labelled its own unverifiable week-ahead dates
++    'confirmed' on the live site. `confirmed` now requires real grounding;
++    week-ahead events can never exceed `supported` without external
++    verification.
++    """
++    covs = [t.get("coverage") or 0 for t in data.get("agenda_topics") or []]
++    if covs and min(covs) >= 3:
++        agenda_status = "supported"
++    elif covs and min(covs) >= 1:
++        agenda_status = "emerging"
++    else:
++        agenda_status = "interpretive"
++    episodes = data.get("episode_count") or 0
++    return [
++        {"section": "Thesis",
++         "status": "supported" if episodes else "interpretive",
++         "note": f"derived from {episodes} episode digests"},
++        {"section": "Agenda topics",
++         "status": agenda_status,
++         "note": "coverage computed server-side from programme evidence"},
++        {"section": "Narratives",
++         "status": "interpretive",
++         "note": "frames inferred from topic sequencing, not full transcripts"},
++        {"section": "Week ahead events",
++         "status": "supported",
++         "note": "calendar items; dates not externally verified"},
++    ]
++
++
+ def _derive_legacy(data: dict) -> dict:
+     """Schema v2 superset -> v1-compatible fields (email/PDF/QC keep working).
+     Also guarantees week_summary (thesis) and repeated-count stability."""
+@@ -156,32 +230,17 @@ def _derive_legacy(data: dict) -> dict:
+     data.setdefault("evidence_statuses", [])
+     data.setdefault("week_ahead_events", [])
+ 
++    # pr_counsel: never stitched from comms_boxes (mechanically concatenated
++    # client-facing copy is worse than an honest gap). Missing fields stay
++    # empty, raise a warning, and are gated by QC's pr_counsel_complete check.
+     pr = data.get("pr_counsel") or {}
+-    boxes = data.get("comms_boxes") or []
+-    if not (pr.get("risk_en") and pr.get("avoid_en")) and boxes:
+-        risks = [b.get("risky_en", "") for b in boxes if b.get("risky_en")]
+-        preps = [e for b in boxes for e in (b.get("evidence_to_prepare_en") or []) if e][:3]
+-        imps = [b.get("implication_en", "") for b in boxes if b.get("implication_en")]
+-        if not pr.get("risk_en"):
+-            pr["risk_en"] = risks[0] if risks else (imps[0] if imps else "")
+-        if not pr.get("avoid_en"):
+-            pr["avoid_en"] = " ".join(risks[:2])
+-        if not pr.get("prepare_en"):
+-            pr["prepare_en"] = " ".join(preps)
+-        if not pr.get("opportunity_en"):
+-            pr["opportunity_en"] = imps[-1] if imps else (pr.get("risk_en") or "")
+-        rose = data.get("comms_boxes") or []
+-        zh_risks = [b.get("risky_zh", "") for b in rose if b.get("risky_zh")]
+-        zh_preps = [e for b in rose for e in (b.get("evidence_to_prepare_zh") or []) if e][:3]
+-        zh_imps = [b.get("implication_zh", "") for b in rose if b.get("implication_zh")]
+-        if not pr.get("risk_zh"):
+-            pr["risk_zh"] = zh_risks[0] if zh_risks else (zh_imps[0] if zh_imps else "")
+-        if not pr.get("avoid_zh"):
+-            pr["avoid_zh"] = " ".join(zh_risks[:2])
+-        if not pr.get("prepare_zh"):
+-            pr["prepare_zh"] = " ".join(zh_preps)
+-        if not pr.get("opportunity_zh"):
+-            pr["opportunity_zh"] = zh_imps[-1] if zh_imps else pr.get("risk_zh", "")
++    for k in ("risk_en", "risk_zh", "opportunity_en", "opportunity_zh",
++              "prepare_en", "prepare_zh", "avoid_en", "avoid_zh"):
++        pr.setdefault(k, "")
++    missing = sorted(k for k, v in pr.items() if not v)
++    if missing:
++        data.setdefault("warnings", []).append(
++            "pr_counsel incomplete: " + ", ".join(missing))
+     data["pr_counsel"] = pr
+ 
+     return data
+diff --git a/tests/test_qc_v2.py b/tests/test_qc_v2.py
+index a963681..44a918f 100644
+--- a/tests/test_qc_v2.py
++++ b/tests/test_qc_v2.py
+@@ -48,6 +48,11 @@ def _full(v2: bool) -> dict:
+             "watchpoints": [{"trigger_en": "w"}] * 3,
+             "media_exchanges": [{"pattern_en": "p", "premise_en": "p"}] * 3,
+             "evidence_statuses": [{"status": "supported"}] * 2,
++            "pr_counsel": {
++                "risk_en": "r", "risk_zh": "r", "opportunity_en": "o",
++                "opportunity_zh": "o", "prepare_en": "p", "prepare_zh": "p",
++                "avoid_en": "a", "avoid_zh": "a",
++            },
+             "week_ahead_events": [
+                 {"date": "2026-08-10", "event_en": "BOJ"},
+                 {"date": "2026-08-12", "event_en": "CPI"},
+diff --git a/tests/test_synthesis_integrity.py b/tests/test_synthesis_integrity.py
+new file mode 100644
+index 0000000..d9e69de
+--- /dev/null
++++ b/tests/test_synthesis_integrity.py
+@@ -0,0 +1,300 @@
++"""Contract tests for the evidence-loyalty changes (PR-1).
++
++Covers: server-side coverage overrides, rule-based evidence statuses,
++synth_failed marker, LLM retry/backoff, pr_counsel no-stitch gate,
++per-field figure alignment, week-ahead weekday rule, bilingual parity gates.
++"""
++import json
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "backend"))
++
++from backend.app import config  # noqa: E402
++from backend.app import db  # noqa: E402
++from backend.app import llm  # noqa: E402
++from backend.app.synth import qc as qcmod  # noqa: E402
++from backend.app.synth import weekly  # noqa: E402
++
++W_START, W_END = "2026-08-10", "2026-08-14"
++
++
++@pytest.fixture
++def week_db(tmp_path, monkeypatch):
++    db_path = tmp_path / "synth.db"
++    monkeypatch.setattr(config, "DB_PATH", db_path)
++    monkeypatch.setattr(config, "ROOT", tmp_path)
++    db.init_db()
++    for i, day in enumerate(["2026-08-10", "2026-08-11", "2026-08-12"]):
++        ep = f"ep{i}"
++        db.upsert_episode({"id": ep, "source_id": "bloomberg_asia_trade",
++                           "title": f"The Asia Trade {day}", "show_name": "The Asia Trade",
++                           "pub_date": day, "kind": "yt"})
++        db.upsert_analysis(ep, (
++            "## 2. Hot Topics\n"
++            "**1. Yen intervention watch as dollar weakens**\n"
++            "- *Tone:* Cautious (-1)\n\n"
++            "## 5. Anchor–Guest Tension\n"
++            "1. **Anchor question:** Will it hold?\n"
++            "   **Guest reply:** Maybe. **Tension point:** credibility\n"), None, None)
++    yield db_path
++
++
++def _llm_payload(coverage=5):
++    return {
++        "report_title": "International Financial Media Weekly",
++        "thesis_en": "T", "thesis_zh": "T",
++        "agenda_topics": [{
++            "rank": 1, "title_en": "Yen intervention watch as dollar weakens",
++            "title_zh": "日元", "summary_en": "s", "summary_zh": "摘",
++            "priority": "high", "momentum": "rising", "evidence": "moderate",
++            "coverage": coverage,  # LLM claims 5 programmes
++            "driver_en": "d", "driver_zh": "d", "next_test_en": "n",
++            "next_test_zh": "n", "stakes_en": "st", "stakes_zh": "st",
++        }],
++        "narratives": [], "comms_boxes": [], "question_groups": [],
++        "media_exchanges": [], "watchpoints": [], "week_ahead_events": [],
++        "evidence_statuses": [
++            {"section": "Week ahead events", "status": "confirmed",
++             "note": "LLM self-graded"}],
++        "interview_groups_en": [], "interview_groups_zh": [],
++        "pr_counsel": {"risk_en": "r", "risk_zh": "r", "opportunity_en": "o",
++                       "opportunity_zh": "o", "prepare_en": "p",
++                       "prepare_zh": "p", "avoid_en": "a", "avoid_zh": "a"},
++        "warnings": [],
++    }
++
++
++def test_coverage_overridden_by_server_evidence(week_db, monkeypatch):
++    """LLM-claimed coverage=5 must be replaced by the real programme count."""
++    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload(coverage=5))
++    out = weekly.synthesize_week(W_START, W_END)
++    ed = db.edition_full(out["edition"])
++    topic = ed["data"]["agenda_topics"][0]
++    assert topic["coverage"] == 1  # only The Asia Trade carried it
++    assert topic["evidence_programmes"] == ["The Asia Trade"]
++    assert ed["data"]["episode_count"] == 3
++
++
++def test_zero_evidence_topic_gets_warning_and_zero_coverage(week_db, monkeypatch):
++    payload = _llm_payload()
++    payload["agenda_topics"][0]["title_en"] = "Martian bond market rally"
++    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: payload)
++    out = weekly.synthesize_week(W_START, W_END)
++    ed = db.edition_full(out["edition"])
++    topic = ed["data"]["agenda_topics"][0]
++    assert topic["coverage"] == 0
++    assert any("no episode evidence" in w for w in ed["data"]["warnings"])
++
++
++def test_evidence_statuses_rule_based_never_confirmed(week_db, monkeypatch):
++    """LLM self-graded 'confirmed' week-ahead must be replaced by rules."""
++    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
++    out = weekly.synthesize_week(W_START, W_END)
++    statuses = {s["section"]: s["status"]
++                for s in db.edition_full(out["edition"])["data"]["evidence_statuses"]}
++    assert statuses["Week ahead events"] == "supported"
++    assert "confirmed" not in statuses.values()
++
++
++def test_llm_failure_marks_synth_failed(week_db, monkeypatch):
++    def boom(*a, **k):
++        raise RuntimeError("api down")
++    monkeypatch.setattr(weekly.llm, "chat_json", boom)
++    with pytest.raises(RuntimeError):
++        weekly.synthesize_week(W_START, W_END)
++    ed = db.edition_full(f"{W_START}_to_{W_END}")
++    assert ed["status"] == "synth_failed"
++    raw = week_db.parent / "data" / "llm_raw" / f"{W_START}_to_{W_END}.json"
++    assert raw.exists() and "api down" in raw.read_text()
++
++
++def test_raw_payload_dumped(week_db, monkeypatch):
++    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
++    weekly.synthesize_week(W_START, W_END)
++    raw = json.loads((week_db.parent / "data" / "llm_raw"
++                      / f"{W_START}_to_{W_END}.json").read_text())
++    assert raw["payload"]["report_title"] == "International Financial Media Weekly"
++
++
++def test_chat_retries_transient_errors(monkeypatch):
++    calls = {"n": 0}
++
++    class FakeResponse:
++        def raise_for_status(self):
++            if calls["n"] < 3:
++                import httpx
++                raise httpx.HTTPError("flaky")
++
++        def json(self):
++            return {"choices": [{"message": {"content": "ok"}}]}
++
++    class FakeClient:
++        def __init__(self, **k): pass
++        def __enter__(self): return self
++        def __exit__(self, *a): return False
++
++        def post(self, *a, **k):
++            calls["n"] += 1
++            return FakeResponse()
++
++    monkeypatch.setattr(llm.httpx, "Client", FakeClient)
++    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
++    monkeypatch.setenv(config.ANALYSIS["api_key_env"], "test-key")
++    assert llm.chat([{"role": "user", "content": "hi"}]) == "ok"
++    assert calls["n"] == 3  # failed twice, succeeded on third
++
++
++def test_chat_gives_up_after_retries(monkeypatch):
++    class FakeClient:
++        def __init__(self, **k): pass
++        def __enter__(self): return self
++        def __exit__(self, *a): return False
++
++        def post(self, *a, **k):
++            import httpx
++            raise httpx.HTTPError("down")
++
++    monkeypatch.setattr(llm.httpx, "Client", FakeClient)
++    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
++    monkeypatch.setenv(config.ANALYSIS["api_key_env"], "test-key")
++    with pytest.raises(RuntimeError, match="after 3 attempts"):
++        llm.chat([{"role": "user", "content": "hi"}])
++
++
++def test_chat_json_retries_malformed(monkeypatch):
++    outs = iter(["not json", "still not", '{"a": 1}'])
++    monkeypatch.setattr(llm, "chat", lambda *a, **k: next(outs))
++    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
++    assert llm.chat_json("s", "u") == {"a": 1}
++
++
++def test_ticker_marks_unverified_quotes(tmp_path, monkeypatch):
++    """Anchor questions not found in the transcript are flagged verified=False."""
++    from backend.app.api import routes
++    db_path = tmp_path / "tick.db"
++    monkeypatch.setattr(config, "DB_PATH", db_path)
++    db.init_db()
++    db.upsert_episode({"id": "epA", "source_id": "bloomberg_asia_trade", "title": "t",
++                       "show_name": "The Asia Trade", "pub_date": "2026-08-11",
++                       "kind": "yt"})
++    db.replace_chunks("epA", ["the anchor asked will the yen defense hold this "
++                              "quarter against the dollar"])
++    items = routes._ticker([
++        {"show": "The Asia Trade", "date": "2026-08-11", "tone": "challenging",
++         "questions": ["Will the yen defense hold this quarter?"]},
++        {"show": "The Asia Trade", "date": "2026-08-11", "tone": "evasive",
++         "questions": ["Is the martian bond rally sustainable?"]},
++    ])
++    assert items[0]["verified"] is True
++    assert items[1]["verified"] is False
++
++
++def test_sync_sources_disables_stale(tmp_path, monkeypatch):
++    """Sources dropped from yaml must disappear from public source_health."""
++    db_path = tmp_path / "src.db"
++    monkeypatch.setattr(config, "DB_PATH", db_path)
++    db.init_db()
++    db.upsert_source({"id": "ghost_feed", "name": "Ghost", "outlet": "G",
++                      "kind": "rss", "enabled": False})
++    db.sync_sources()  # yaml-driven: ghost_feed is not in yaml -> disabled
++    ids = {s["id"] for s in db.source_health()}
++    assert "ghost_feed" not in ids
++    ids_all = {s["id"] for s in db.source_health(include_disabled=True)}
++    assert "ghost_feed" in ids_all
++
++
++# --- QC-level gates -----------------------------------------------------------
++
++def _v2_payload(**over):
++    data = {
++        "start_date": W_START, "end_date": W_END,
++        "report_title": "International Financial Media Weekly",
++        "thesis_en": "T", "thesis_zh": "T",
++        "week_summary_en": "S", "week_summary_zh": "Z",
++        "agenda_topics": [{"title_en": "t", "summary_en": "s", "priority": "high",
++                           "momentum": "rising", "evidence": "strong",
++                           "driver_en": "d", "next_test_en": "n", "stakes_en": "st"}
++                          for _ in range(3)],
++        "narratives": [{"driver_en": "d", "why_en": "w", "next_test_en": "n"}
++                       for _ in range(3)],
++        "comms_boxes": [{"title_en": "c"} for _ in range(3)],
++        "question_groups": [{"category": "policy_credibility",
++                             "questions_en": ["a"], "questions_zh": ["甲"]}],
++        "watchpoints": [{"trigger_en": "w"}] * 3,
++        "media_exchanges": [{"pattern_en": "p", "premise_en": "p"}] * 3,
++        "evidence_statuses": [{"status": "supported"}],
++        "interview_groups_en": [{"title_en": "g", "questions_en": ["q"]}],
++        "interview_groups_zh": [{"title_zh": "组", "questions_zh": ["问"]}],
++        "pr_counsel": {"risk_en": "r", "risk_zh": "r", "opportunity_en": "o",
++                       "opportunity_zh": "o", "prepare_en": "p", "prepare_zh": "p",
++                       "avoid_en": "a", "avoid_zh": "a"},
++        "recurring_questions_en": ["a", "b", "c"],
++        "week_ahead_events": [
++            {"date": "2026-08-17", "event_en": "BOJ"},
++            {"date": "2026-08-19", "event_en": "CPI"},
++            {"date": "2026-08-21", "event_en": "Earnings"}],
++        "warnings": [],
++    }
++    data.update(over)
++    return data
++
++
++def _run(tmp_path, monkeypatch, data):
++    db_path = tmp_path / "q.db"
++    monkeypatch.setattr(config, "DB_PATH", db_path)
++    db.init_db()
++    eid = db.upsert_edition(data, {"episodes": [
++        {"date": d} for d in ("2026-08-10", "2026-08-11",
++                              "2026-08-12", "2026-08-13")]}, None)
++    return qcmod.run_qc(eid)
++
++
++def test_pr_counsel_incomplete_blocks(tmp_path, monkeypatch):
++    data = _v2_payload(pr_counsel={"risk_en": "r"})
++    r = _run(tmp_path, monkeypatch, data)
++    assert r["status"] == "FAIL" and "pr_counsel_complete" in r["blocks"]
++
++
++def test_interview_groups_unbalanced_blocks(tmp_path, monkeypatch):
++    data = _v2_payload(interview_groups_zh=[])
++    r = _run(tmp_path, monkeypatch, data)
++    assert r["status"] == "FAIL" and "interview_groups_parallel" in r["blocks"]
++
++
++def test_question_group_imbalance_blocks(tmp_path, monkeypatch):
++    data = _v2_payload(question_groups=[{
++        "category": "policy_credibility", "questions_en": ["a", "b"],
++        "questions_zh": ["甲"]}])
++    r = _run(tmp_path, monkeypatch, data)
++    assert r["status"] == "FAIL" and "question_group_items_parallel" in r["blocks"]
++
++
++def test_week_ahead_weekend_rejected(tmp_path, monkeypatch):
++    # 2026-08-16 is a Sunday
++    data = _v2_payload(week_ahead_events=[
++        {"date": "2026-08-16", "event_en": "Sunday event"},
++        {"date": "2026-08-19", "event_en": "CPI"},
++        {"date": "2026-08-21", "event_en": "Earnings"}])
++    r = _run(tmp_path, monkeypatch, data)
++    assert "week_ahead_present" in r["blocks"]
++
++
++def test_figure_diffs_are_per_field(tmp_path, monkeypatch):
++    data = _v2_payload(thesis_en="Oil at 90 dollars", thesis_zh="油价九十美元")
++    r = _run(tmp_path, monkeypatch, data)
++    check = next(c for c in r["checks"] if c["check"] == "en_zh_figures_align")
++    assert not check["pass"]
++    assert "thesis" in check["detail"] and "90" in check["detail"]
++    # v2: still informational, not blocking
++    assert "en_zh_figures_align" not in r["blocks"]
++
++
++def test_figure_year_rollover_no_false_positive(tmp_path, monkeypatch):
++    # The reporting year in dates must not trip the check in any year.
++    data = _v2_payload()
++    r = _run(tmp_path, monkeypatch, data)
++    check = next(c for c in r["checks"] if c["check"] == "en_zh_figures_align")
++    assert check["pass"], check["detail"]
+diff --git a/tests/test_weekly_derive.py b/tests/test_weekly_derive.py
+index 166f8ff..f59923e 100644
+--- a/tests/test_weekly_derive.py
++++ b/tests/test_weekly_derive.py
+@@ -48,8 +48,12 @@ def test_legacy_fields_derived_from_v2():
+     assert data["recurring_questions_en"] == [
+         "Will Tokyo act again?", "Does BOJ confirm?", "Where does JPY settle?"]
+     assert data["watchlist_en"] == ["USDJPY above 158"]
+-    assert data["pr_counsel"]["risk_en"] == "Calling the staying power theater is risky."
+-    assert data["pr_counsel"]["prepare_en"] == "Hedge disclosures"
++    # pr_counsel is never stitched from comms_boxes: missing cells stay empty
++    # and raise a warning; QC's pr_counsel_complete gate handles enforcement.
++    assert data["pr_counsel"]["risk_en"] == ""
++    assert data["pr_counsel"]["prepare_en"] == ""
++    assert data["pr_counsel"]["opportunity_en"] == "SEO"
++    assert any("pr_counsel incomplete" in w for w in data["warnings"])
+     ex = data["media_exchanges"][0]
+     assert ex["likely_to_recur"] is True
+     assert data["evidence_statuses"] == []
+-- 
+2.43.0
+

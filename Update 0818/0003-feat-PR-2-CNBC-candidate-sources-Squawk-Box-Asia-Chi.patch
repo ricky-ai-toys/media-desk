@@ -1,0 +1,235 @@
+From c3450a80970e0ea4066f0a9abd309a43b49fa753 Mon Sep 17 00:00:00 2001
+From: dev <dev@media.desk>
+Date: Mon, 17 Aug 2026 23:30:02 +0800
+Subject: [PATCH 3/5] feat(PR-2): CNBC candidate sources (Squawk Box Asia /
+ China Connection / Street Signs Asia, gated by verify_sources.py),
+ sample-frame disclosure in prompt + methodology, public pipeline trim
+
+---
+ backend/app/export/media_export.py | 24 ++++++--
+ backend/app/synth/weekly.py        | 16 +++++-
+ config/sources.yaml                | 27 ++++++++-
+ scripts/verify_sources.py          | 88 ++++++++++++++++++++++++++++++
+ 4 files changed, 148 insertions(+), 7 deletions(-)
+ create mode 100644 scripts/verify_sources.py
+
+diff --git a/backend/app/export/media_export.py b/backend/app/export/media_export.py
+index 28f2f8b..60c99aa 100644
+--- a/backend/app/export/media_export.py
++++ b/backend/app/export/media_export.py
+@@ -38,6 +38,24 @@ def interviews_csv(edition_id: str) -> str:
+     return out.getvalue()
+ 
+ 
++def _methodology(edition: dict) -> str:
++    """Methodology text with the sample frame stated up front — the report's
++    claims describe the monitored set, not 'the media' in general."""
++    d = edition["data"]
++    outlets = ", ".join(d.get("monitored_outlets", [])) or "monitored outlets"
++    eps = d.get("episode_count") or len((edition["manifest"] or {}).get("episodes", []))
++    return (
++        f"<p><b>Sample frame:</b> this report monitors {html.escape(outlets)} — "
++        f"{eps} episodes this week — plus wire headlines. Claims about the media "
++        "agenda describe this monitored set, not all financial media.</p>"
++        "<p>Bilingual report synthesised from the week's TV transcripts "
++        "and daily episode analyses; agenda topics are selected dynamically by "
++        "editorial LLM; coverage figures and evidence statuses are computed "
++        "server-side from the episode record, not estimated by the model; "
++        "interview log derives from anchor-guest exchanges, with items marked "
++        "'paraphrase' where wording could not be verified against the transcript.</p>")
++
++
+ def print_html(edition: dict) -> str:
+     """Full A4 print layout: cover + EN + ZH + appendix."""
+     from .email import render_email
+@@ -48,10 +66,8 @@ def print_html(edition: dict) -> str:
+         + "".join(f"<li>{e.get('date')} · {e.get('program')} · {e.get('file')}</li>"
+                   for e in (edition["manifest"] or {}).get("episodes", [])[:40])
+         + "</ul>"
+-        + '<h2>Methodology</h2><p>Bilingual report synthesised from the week\'s TV transcripts '
+-        'and daily episode analyses; agenda topics are selected dynamically by editorial LLM; '
+-        'interview log derives from anchor-guest exchanges.</p>'
+-        '<h2>QC</h2><pre>' + html.escape(
++        + '<h2>Methodology</h2>' + _methodology(edition)
++        + '<h2>QC</h2><pre>' + html.escape(
+             json.dumps(edition.get("qc") or {}, ensure_ascii=False, indent=1)[:2000]) + "</pre>"
+     )
+     return body + appendix
+diff --git a/backend/app/synth/weekly.py b/backend/app/synth/weekly.py
+index ac356ba..20e0184 100644
+--- a/backend/app/synth/weekly.py
++++ b/backend/app/synth/weekly.py
+@@ -37,6 +37,9 @@ SYSTEM = (
+     "one job. "
+     "(5) Watchpoints must name a trigger, the possible narrative change, affected areas, and what "
+     "would raise its priority. "
++    "(5b) monitored_outlets must list exactly the programmes supplied in the context — "
++    "never name an outlet that was not monitored this week; the report's authority rests "
++    "on its stated sample frame. "
+     "(6) Every ZH field must read as natural, idiomatic simplified Chinese written by a "
+     "mainland financial-media desk — restructure sentences and collocations rather than "
+     "translating EN word-for-word; no English syntax or awkward calques in ZH text. "
+@@ -94,7 +97,8 @@ def synthesize_week(start: str, end: str, force: bool = False) -> dict:
+         f"first={evidence['first_seen'].get(t, '?')} last={evidence['last_seen'].get(t, '?')}"
+         for t, n in list(evidence["topic_counts"].items())[:25])
+     user = (
+-        f"REPORTING WEEK: {start} to {end}\n\n"
++        f"REPORTING WEEK: {start} to {end}\n"
++        f"MONITORED PROGRAMMES THIS WEEK: {', '.join(_week_outlets(start, end))}\n\n"
+         f"## Agenda evidence (topic -> episode mentions)\n"
+         f"{json.dumps(evidence['topic_counts'], ensure_ascii=False)[:4000]}\n"
+         f"## Coverage evidence (programmes carrying each topic)\n{cov_lines[:4000]}\n"
+@@ -259,6 +263,16 @@ def _episode_digest(start: str, end: str) -> str:
+     return "\n".join(lines) or "(no analyses available this week)"
+ 
+ 
++def _week_outlets(start: str, end: str) -> list[str]:
++    """Programmes actually monitored this week — the report's sample frame."""
++    with db.conn() as c:
++        rows = c.execute(
++            "SELECT DISTINCT show_name FROM episodes "
++            "WHERE pub_date>=? AND pub_date<=? AND show_name IS NOT NULL "
++            "ORDER BY show_name", (start, end)).fetchall()
++    return [r["show_name"] for r in rows if r["show_name"]]
++
++
+ def _manifest(start: str, end: str) -> dict:
+     with db.conn() as c:
+         rows = c.execute(
+diff --git a/config/sources.yaml b/config/sources.yaml
+index afc3c15..0c88701 100644
+--- a/config/sources.yaml
++++ b/config/sources.yaml
+@@ -44,10 +44,33 @@ sources:
+     outlet: "CNBC Asia"
+     kind: yt_playlist
+     playlist_id: ""
+-    playlist_url: ""
++    # Channel-level URL works with yt-dlp --flat-playlist; verify on the server
++    # with scripts/verify_sources.py before enabling (captions must clear
++    # fetch.min_transcript_words for full episodes, not clips).
++    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
+     title_regex: "Squawk Box Asia.*"
+     enabled: false
+-    note: "Full-show transcripts not reliably on YouTube (clips only). Re-enable when an episode playlist surfaces."
++    note: "Candidate: CNBC full episodes surface on @CNBCtelevision. Run scripts/verify_sources.py cnbc_squawk_box_asia; enable only on GO."
++
++  - id: cnbc_china_connection
++    name: "The China Connection"
++    outlet: "CNBC Asia"
++    kind: yt_playlist
++    playlist_id: ""
++    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
++    title_regex: "China Connection.*"
++    enabled: false
++    note: "Candidate: verify with scripts/verify_sources.py cnbc_china_connection; enable only on GO."
++
++  - id: cnbc_street_signs_asia
++    name: "Street Signs Asia"
++    outlet: "CNBC Asia"
++    kind: yt_playlist
++    playlist_id: ""
++    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
++    title_regex: "Street Signs Asia.*"
++    enabled: false
++    note: "Candidate: verify with scripts/verify_sources.py cnbc_street_signs_asia; enable only on GO."
+ 
+   - id: wire_markets
+     name: "Market News Wire"
+diff --git a/scripts/verify_sources.py b/scripts/verify_sources.py
+new file mode 100644
+index 0000000..7a0e08d
+--- /dev/null
++++ b/scripts/verify_sources.py
+@@ -0,0 +1,88 @@
++"""Verify candidate yt_playlist sources before enabling them.
++
++For each disabled source with a playlist_url, checks (via yt-dlp):
++  1. the URL resolves and yields flat-playlist rows
++  2. title_regex matches recent uploads
++  3. captions (manual or auto-subs, en) are available for matched items
++  4. transcript word count clears fetch.min_transcript_words
++
++Prints a go/no-go report. Run on the server (needs YouTube access):
++
++    .venv/bin/python scripts/verify_sources.py            # all disabled yt sources
++    .venv/bin/python scripts/verify_sources.py cnbc_squawk_box_asia
++"""
++import subprocess
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++import yaml  # noqa: E402
++
++CFG = Path(__file__).resolve().parents[1] / "config" / "sources.yaml"
++
++
++def _run(cmd: list[str], timeout: int = 120) -> tuple[bool, str]:
++    try:
++        out = subprocess.check_output(cmd, text=True, stderr=subprocess.STDOUT,
++                                      timeout=timeout)
++        return True, out
++    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
++        return False, str(getattr(e, "output", e))[:300]
++
++
++def verify(source: dict) -> dict:
++    import re
++    r = {"id": source["id"], "checks": {}, "go": False}
++    url = source.get("playlist_url")
++    if not url:
++        r["checks"]["url_present"] = False
++        return r
++    r["checks"]["url_present"] = True
++    ok, out = _run(["yt-dlp", "--flat-playlist", "--playlist-end", "10",
++                    "--print", "%(id)s|%(title)s", url])
++    r["checks"]["playlist_resolves"] = ok
++    if not ok:
++        r["error"] = out
++        return r
++    rows = [l.split("|", 1) for l in out.splitlines() if "|" in l]
++    pattern = re.compile(source.get("title_regex", ".*"), re.IGNORECASE)
++    matched = [(vid, t) for vid, t in rows if len(vid) > 3 and pattern.search(t or "")]
++    r["checks"]["title_matches"] = len(matched)
++    if not matched:
++        return r
++    vid = matched[0][0]
++    ok, out = _run(["yt-dlp", "--skip-download", "--write-auto-subs", "--write-subs",
++                    "--sub-langs", "en.*", "--print", "%(subtitles)s",
++                    f"https://www.youtube.com/watch?v={vid}"], timeout=180)
++    r["checks"]["captions_probe"] = ok
++    r["sample"] = {"id": vid, "title": matched[0][1][:80]}
++    r["go"] = all([r["checks"]["url_present"], r["checks"]["playlist_resolves"],
++                   r["checks"]["title_matches"] > 0, r["checks"]["captions_probe"]])
++    return r
++
++
++def main():
++    cfg = yaml.safe_load(CFG.read_text(encoding="utf-8"))
++    only = sys.argv[1] if len(sys.argv) > 1 else None
++    candidates = [s for s in cfg["sources"]
++                  if s.get("kind") == "yt_playlist" and not s.get("enabled", True)]
++    if only:
++        candidates = [s for s in candidates if s["id"] == only]
++    if not candidates:
++        print("no disabled yt_playlist candidates to verify")
++        return
++    for s in candidates:
++        r = verify(s)
++        verdict = "GO  -> safe to set enabled: true" if r["go"] else "NO-GO"
++        print(f"\n== {r['id']}: {verdict}")
++        for k, v in r["checks"].items():
++            print(f"   {k}: {v}")
++        if r.get("sample"):
++            print(f"   sample: {r['sample']['title']} ({r['sample']['id']})")
++        if r.get("error"):
++            print(f"   error: {r['error']}")
++
++
++if __name__ == "__main__":
++    main()
+-- 
+2.43.0
+
