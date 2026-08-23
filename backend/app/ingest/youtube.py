@@ -76,7 +76,9 @@ def _vtt_to_text(text: str) -> str:
 def fetch_transcript(source: dict, vid: str, out_dir: Path) -> str | None:
     """Download captions as VTT, return plain text or None."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    min_words = int(config.FETCH.get("min_transcript_words", 500))
+    # Per-source override: clip-mode sources clear a lower bar than full shows.
+    min_words = int(source.get("min_transcript_words")
+                    or config.FETCH.get("min_transcript_words", 500))
     url = f"https://www.youtube.com/watch?v={vid}"
     subprocess.run(
         ["yt-dlp", "--skip-download", "--write-auto-subs", "--write-subs",
@@ -129,9 +131,15 @@ def sync_playlist(source: dict) -> dict:
         if not text:
             fail += 1
             continue
+        # Clip-mode sources contribute selected segments, not full programmes —
+        # qualify the outlet label so every downstream sample-frame disclosure
+        # (prompt context, PDF methodology, email) states this honestly.
+        label = source["name"]
+        if source.get("content") == "clips":
+            label += " (segment clips)"
         db.upsert_episode({
             "id": ep_id, "source_id": source["id"], "external_id": ep_id,
-            "title": r["title"], "show_name": source["name"], "pub_date": pub,
+            "title": r["title"], "show_name": label, "pub_date": pub,
             "url": f"https://www.youtube.com/watch?v={ep_id}", "kind": "yt",
             "words": len(text.split()),
             "transcript_path": str(config.TRANSCRIPT_DIR / f"{ep_id}.txt"),

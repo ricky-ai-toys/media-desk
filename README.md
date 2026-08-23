@@ -100,11 +100,18 @@ search FTS, auth guards, the QC gate, synthesis integrity (server-side evidence
 overrides, LLM retry/failure markers) and lifecycle chaining rules.
 
 ## Source candidates
-Candidate YouTube sources (e.g. CNBC Asia shows) ship disabled. Verify captions
-and title matching on the server before enabling:
+Candidate YouTube sources ship disabled. Verify captions and title matching on
+the server before enabling:
 ```bash
-.venv/bin/python scripts/verify_sources.py cnbc_squawk_box_asia
+.venv/bin/python scripts/verify_sources.py cnbc_china_connection
 ```
+Source status (verified 2026-08-23):
+- `cnbc_china_connection` — official full-episode playlist confirmed; geo-restricted
+  in some regions, enable only on server-side GO.
+- `cnbc_squawk_box_asia` — clip-mode source (official playlist carries interview
+  segments, not full episodes); episodes surface as "Squawk Box Asia (segment
+  clips)" in every sample-frame disclosure.
+- `cnbc_street_signs_asia` — no official full-episode source exists; keep disabled.
 
 ## Report spec
 Section counts, vocabularies and word budgets live in

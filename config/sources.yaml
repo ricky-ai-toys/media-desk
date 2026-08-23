@@ -43,24 +43,28 @@ sources:
     name: "Squawk Box Asia"
     outlet: "CNBC Asia"
     kind: yt_playlist
-    playlist_id: ""
-    # Channel-level URL works with yt-dlp --flat-playlist; verify on the server
-    # with scripts/verify_sources.py before enabling (captions must clear
-    # fetch.min_transcript_words for full episodes, not clips).
-    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
-    title_regex: "Squawk Box Asia.*"
-    enabled: false
-    note: "Candidate: CNBC full episodes surface on @CNBCtelevision. Run scripts/verify_sources.py cnbc_squawk_box_asia; enable only on GO."
+    playlist_id: "PLJ8IrgLlRTdjdGD49CigFMtJYdduEUsf1"
+    # Official channel playlist carries segment clips (analyst interviews),
+    # not full episodes — clip titles carry no show name, so match all rows.
+    # Episodes surface as "Squawk Box Asia (segment clips)" in the sample frame.
+    playlist_url: "https://www.youtube.com/playlist?list=PLJ8IrgLlRTdjdGD49CigFMtJYdduEUsf1"
+    title_regex: ".+"
+    content: clips
+    min_transcript_words: 200
+    enabled: true
+    note: "Clip-mode source (GO 2026-08-23: 10/10 playlist matches, EN auto-captions ~1.6k words/clip). Episodes surface as 'Squawk Box Asia (segment clips)' in the sample frame."
 
   - id: cnbc_china_connection
     name: "The China Connection"
     outlet: "CNBC Asia"
     kind: yt_playlist
-    playlist_id: ""
-    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
+    playlist_id: "PLJ8IrgLlRTditXsd7Ii0nq33MpZ2Esd_2"
+    # Official 'Watch In Full' playlist — daily full episodes,
+    # titled "The China Connection - DD-MMM-YY".
+    playlist_url: "https://www.youtube.com/playlist?list=PLJ8IrgLlRTditXsd7Ii0nq33MpZ2Esd_2"
     title_regex: "China Connection.*"
     enabled: false
-    note: "Candidate: verify with scripts/verify_sources.py cnbc_china_connection; enable only on GO."
+    note: "Full-episode playlist confirmed 2026-08-23. Geo-restricted in some regions — run scripts/verify_sources.py cnbc_china_connection on the server; enable only on GO."
 
   - id: cnbc_street_signs_asia
     name: "Street Signs Asia"
@@ -70,7 +74,7 @@ sources:
     playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
     title_regex: "Street Signs Asia.*"
     enabled: false
-    note: "Candidate: verify with scripts/verify_sources.py cnbc_street_signs_asia; enable only on GO."
+    note: "No official full-episode source found (2026-08-23): channel playlist is segment clips without captions. Keep disabled unless a full-episode source appears."
 
   - id: wire_markets
     name: "Market News Wire"

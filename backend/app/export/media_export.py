@@ -46,8 +46,10 @@ def _methodology(edition: dict) -> str:
     eps = d.get("episode_count") or len((edition["manifest"] or {}).get("episodes", []))
     return (
         f"<p><b>Sample frame:</b> this report monitors {html.escape(outlets)} — "
-        f"{eps} episodes this week — plus wire headlines. Claims about the media "
-        "agenda describe this monitored set, not all financial media.</p>"
+        f"{eps} episodes this week — plus wire headlines. Outlets suffixed "
+        "'(segment clips)' contribute selected broadcast segments rather than full "
+        "programmes. Claims about the media agenda describe this monitored set, "
+        "not all financial media.</p>"
         "<p>Bilingual report synthesised from the week's TV transcripts "
         "and daily episode analyses; agenda topics are selected dynamically by "
         "editorial LLM; coverage figures and evidence statuses are computed "
