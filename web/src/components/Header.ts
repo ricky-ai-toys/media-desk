@@ -12,10 +12,10 @@ export interface HeaderCallbacks {
   onExport: () => void;
 }
 
-/** Masthead (brand + dateline) and the sticky tools row. */
+/** Masthead (brand + dateline) and the sticky tools row.
+ *  QC state intentionally lives in the footer, not here. */
 export class Header {
   private readonly switcher: EditionSwitcher;
-  private readonly qc: HTMLElement;
   private readonly search: HTMLInputElement;
   private deb: number | undefined;
   private datelineEl: HTMLElement;
@@ -39,7 +39,6 @@ export class Header {
         <div class="tools">
           <div class="tools-in">
             <div id="edition-slot"></div>
-            <span class="qc" id="qc-badge"></span>
             <span class="spacer"></span>
             <button class="btn" id="export-btn">${L("EXPORT", "导出")}</button>
             <input id="search" type="search" placeholder="${L("Search transcripts + wire…", "检索文本与快讯…")}"
@@ -48,10 +47,8 @@ export class Header {
         </div>
       </div>`;
 
-    this.qc = qs<HTMLElement>("#qc-badge", root)!;
     this.search = qs<HTMLInputElement>("#search", root)!;
     this.datelineEl = qs<HTMLElement>("#dateline", root)!;
-    this.qc.textContent = "—";
 
     this.switcher = new EditionSwitcher(qs<HTMLElement>("#edition-slot", root)!, {
       onEdition: cb.onEdition,
@@ -76,16 +73,6 @@ export class Header {
 
   setDateline(start?: string | null, end?: string | null): void {
     this.datelineEl.innerHTML = dateline(start, end);
-  }
-
-  setQc(state: { status: string; blocks?: string[] } | null): void {
-    const ok = !!state && state.status === "PASS";
-    this.qc.textContent = L(ok ? "QC PASS" : "QC FAIL", ok ? "质检通过" : "质检未通过");
-    this.qc.className = `qc ${ok ? "pass" : "fail"}`;
-    const blocks = (state?.blocks ?? []).map(String).filter(Boolean);
-    this.qc.title = ok || !blocks.length
-      ? L("Editorial quality checks passed", "编辑质检全部通过")
-      : L("Blocked checks", "未通过项") + ": " + blocks.map((b) => b.replace(/_/g, " ")).join("; ");
   }
 
   private debouncedSearch(): void {

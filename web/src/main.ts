@@ -38,6 +38,7 @@ const header = new Header(headerRoot, {
   onEdition: (id) => loadDesk(id),
   onLang: () => {
     footer.setPipe(state.meta?.pipeline ?? {});
+    footer.refresh();
     if (state.edition) {
       setTitle(state.edition, getLang());
       loadDesk(state.edition);
@@ -71,8 +72,8 @@ async function loadDesk(edition: string): Promise<void> {
     const desk = await api<Desk>("/api/desk?edition=" + encodeURIComponent(edition));
     state.desk = desk;
     setTitle(edition, getLang());
-    header.setQc(desk.qc);
     header.setDateline(desk.start, desk.end);
+    footer.setQc(desk.qc);
     const prev = state.meta ? prevEditionOf(state.meta, edition) : null;
     reading.showBrief(desk, state.meta?.sources ?? [], state.lifecycle, prev);
   } catch (e) {

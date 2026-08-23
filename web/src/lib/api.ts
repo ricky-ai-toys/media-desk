@@ -172,6 +172,9 @@ export interface LifecycleTrack {
 export interface TickerItem {
   date?: string;
   show?: string;
+  /** Who the exchange was with — highlighted instead of the show name. */
+  guest?: string | null;
+  org?: string | null;
   tone?: string;
   question?: string;
   /** false when the wording was not found verbatim in the transcript */
@@ -202,7 +205,7 @@ export interface Desk {
   start: string;
   end: string;
   status: string;
-  qc: { status: string; blocked?: boolean; blocks?: string[] } | null;
+  qc: QcState | null;
   data: DeskData;
   agenda: AgendaItem[];
   narratives: Narrative[];
@@ -210,6 +213,20 @@ export interface Desk {
   ticker?: TickerItem[];
   pressure?: PressureItem[];
   framing?: { collisions?: unknown[]; lead_lag?: LeadLag[] };
+}
+
+export interface QcCheck {
+  check?: string;
+  pass?: boolean;
+  detail?: string;
+  blockable?: boolean;
+}
+
+export interface QcState {
+  status: string;
+  blocked?: boolean;
+  blocks?: string[];
+  checks?: QcCheck[];
 }
 
 export interface SearchHit {

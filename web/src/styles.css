@@ -250,12 +250,35 @@ summary.g-row::marker { content: ""; }
 summary.narr-head::marker { content: ""; }
 .narr-title { font-family: var(--disp); font-size: var(--h3); font-weight: 600; line-height: 1.3; color: var(--ink); }
 .narr-mini { font-family: var(--mono); font-size: 9.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); white-space: nowrap; }
-.shift-viz-wrap { margin: 12px 0 2px; }
-.shift-viz .s-from { fill: #efe7cf; stroke: var(--amber); }
-.shift-viz .s-to { fill: #e3efe8; stroke: var(--up); }
-.shift-viz .s-line { stroke: #9d8f5f; }
-.shift-viz .s-head { fill: var(--up); }
-.shift-viz .flow-head { fill: var(--ink); animation: flowPulse 1.6s ease-in-out infinite; }
+/* Narrative shift: textual WAS → NOW flow (replaces the old box diagram) */
+.shift-flow { margin: 12px 0 2px; }
+.sf-row { display: flex; gap: 10px; align-items: baseline; }
+.sf-tag { font-family: var(--mono); font-size: 9px; font-weight: 600; letter-spacing: .16em; color: var(--faint); min-width: 36px; flex: none; }
+.sf-row p { margin: 0; font-family: var(--disp); font-size: 13.5px; line-height: 1.5; }
+.sf-row.past .sf-tag { color: var(--amber); }
+.sf-row.past p { color: var(--faint); }
+.sf-row.now .sf-tag { color: var(--up); }
+.sf-row.now p { color: var(--ink); font-weight: 500; }
+.sf-arrow { color: var(--slate); font-size: 11px; line-height: 1; margin: 2px 0 2px 46px; }
+
+/* Collapsed QC strip at the end of the page */
+.qc-details { border-top: 1px solid var(--hair); margin-top: 34px; padding-top: 10px; }
+.qc-details summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 10px; }
+.qc-details summary::-webkit-details-marker { display: none; }
+.qc-details summary b { font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--signal); }
+.qc-details summary .qc { min-width: auto; padding: 3px 8px; }
+.qc-caret { color: var(--slate); font-style: normal; transition: transform .15s ease; }
+.qc-details[open] .qc-caret { transform: rotate(90deg); }
+.qc-details ul { margin: 10px 0 0 18px; padding: 0; }
+.qc-details li { font-size: 13.5px; color: var(--ink); margin: 4px 0; }
+
+/* Rail ticker attribution: who said it, not where it aired */
+.tick .who { display: block; font-weight: 600; color: var(--ink); font-size: 12px; margin-top: 2px; }
+
+/* Word cloud block — hidden until the PNG loads, removed on error */
+.wc-pending img { display: none; }
+.rail-sec img { width: 100%; height: auto; display: block; border: 1px solid var(--hair); }
+.wc-cap { margin: 6px 0 0; }
 @keyframes flowPulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .narr-body { display: grid; gap: 9px; padding-top: 12px; }
 .dotline { display: flex; gap: 9px; align-items: flex-start; }

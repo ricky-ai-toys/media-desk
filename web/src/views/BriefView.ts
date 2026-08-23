@@ -1,8 +1,8 @@
-import type { AgendaItem, Desk, DeskData, InterviewGroup, LeadLag, LifecycleTrack, Narrative, PrCounsel, SourceHealth, TickerItem } from "../lib/api";
+import type { AgendaItem, Desk, DeskData, InterviewGroup, LeadLag, LifecycleTrack, Narrative, PrCounsel, QcCheck, SourceHealth, TickerItem } from "../lib/api";
 import { asList, esc } from "../lib/dom";
 import { clip, ellipsis, shortDate } from "../lib/format";
 import { DIR_ZH, EVID_ZH, dirLabel, getLang, L, pick, QCAT } from "../lib/i18n";
-import { MOM_ARROW, shiftSvg } from "../lib/svg";
+import { MOM_ARROW } from "../lib/svg";
 
 /* ---------------------------------- section scaffolding ---------------------------------- */
 
@@ -20,7 +20,6 @@ const empty = (): string => `<div class="empty">${L("Empty", "暂无数据")}</d
 /* ---------------------------------- lead story ---------------------------------- */
 
 function lead(d: Desk, dd: DeskData, lifecycle: LifecycleTrack[], prevEdition: string | null): string {
-  const outlets = asList(dd.monitored_outlets).join(", ");
   const thesis = pick(dd.thesis_en, dd.thesis_zh) || pick(dd.week_summary_en, dd.week_summary_zh) || "—";
   // Headline = first sentence (or first em-dash clause for run-on leads),
   // body = the remainder — the full thesis must stay on the page.
@@ -42,7 +41,6 @@ function lead(d: Desk, dd: DeskData, lifecycle: LifecycleTrack[], prevEdition: s
         ${heroDelta(d, lifecycle, prevEdition)}
         <span>${L("Week", "周期")} <b>${shortDate(d.start)} → ${shortDate(d.end)}</b></span>
         ${dd.episode_count != null ? `<span>${L("Episodes", "节目")} <b>${dd.episode_count}</b></span>` : ""}
-        ${outlets ? `<span>${L("Monitoring", "监测")} <b>${esc(outlets)}</b></span>` : ""}
       </p>
     </article>`;
 }
@@ -76,11 +74,12 @@ function heroDelta(desk: Desk, tracks: LifecycleTrack[], prevEdition: string | n
   const dropped = prevEdition ? tracks.filter((t) => t.last_seen === prevEdition).length : 0;
   if (!nw && !carried && !dropped) return "";
   const parts = [
-    nw ? `${nw} ${L("new", "新增")}` : "",
-    carried ? `${carried} ${L("carried", "延续")}` : "",
-    dropped ? `${dropped} ${L("dropped", "淡出")}` : "",
+    nw ? `${nw} ${L("topics new", "个新议题")}` : "",
+    carried ? `${carried} ${L("carried over", "个延续")}` : "",
+    dropped ? `${dropped} ${L("dropped", "个淡出")}` : "",
   ].filter(Boolean);
-  return parts.length ? `<span>${parts.join(" · ")}</span>` : "";
+  const tip = L("Topic lifecycle vs the previous edition", "与上一期相比的议题轨迹");
+  return parts.length ? `<span title="${esc(tip)}">${parts.join(" · ")}</span>` : "";
 }
 
 /* ---------------------------------- agenda: the tape ---------------------------------- */
@@ -96,7 +95,8 @@ function tapeRow(a: AgendaItem, i: number, episodes: number, lc: Map<string, Lif
   const arrow = MOM_ARROW[momentum] || "→";
   const dots = EVID_DOTS[evidence]?.[0] ?? 0;
   const dotStr = "●".repeat(dots) + "○".repeat(3 - dots);
-  const title = ellipsis(pick(a.title_en, a.title_zh), 52) || "—";
+  // Full title — truncation hid the actual story; let it wrap instead.
+  const title = pick(a.title_en, a.title_zh) || "—";
   const sub = ellipsis(pick(a.summary_en, a.summary_zh), 160);
   const prioLab = prio ? L(PRIO_LAB[prio as keyof typeof PRIO_LAB] || prio.toUpperCase(), DIR_ZH[prio] || prio.toUpperCase()) : "";
   const cls = PRIO_CLS[prio as keyof typeof PRIO_CLS] || "";
@@ -182,11 +182,17 @@ const QC_HINT: Record<string, { en: string; zh: string }> = {
   week_ahead_present: { en: "the week-ahead calendar section is missing", zh: "下周前瞻板块缺失" },
 };
 
-function qcNotice(d: Desk): string {
+function qcSummaryText(blocks: number, total: number): string {
+  if (!blocks) return L(`Editorial QC flagged ${total} note(s) — click to expand`, `编辑质检备注 ${total} 条——点击展开`);
+  return L(`QC blocked ${blocks} item(s), ${total - blocks} note(s) — click to expand`, `质检阻断 ${blocks} 项、备注 ${total - blocks} 条——点击展开`);
+}
+
+function qcDetails(d: Desk): string {
   const qc = d.qc;
   if (!qc || qc.status === "PASS") return "";
   const blocks = asList(qc.blocks).map(String);
-  if (!blocks.length) return "";
+  const failing = asList<QcCheck>(qc.checks).filter((c) => c && c.pass === false && c.check);
+  if (!blocks.length && !failing.length) return "";
   const items = blocks
     .map((b) => {
       const h = QC_HINT[b];
@@ -194,11 +200,20 @@ function qcNotice(d: Desk): string {
       return `<li>${esc(text)}</li>`;
     })
     .join("");
+  const details = failing.length
+    ? `<div class="ts-sub">${esc(L("All flagged checks", "全部标记项"))}</div>
+       <ul class="feed muted">${failing.map((c) => `<li><b>${esc(String(c.check).replace(/_/g, " "))}</b>${c.detail ? ` — ${esc(c.detail)}` : ""}</li>`).join("")}</ul>`
+    : "";
   return `
-    <div class="qc-note" role="note">
-      <b>${esc(L("Editorial QC flagged this draft — sections may be incomplete:", "编辑质检标记本期草稿——部分板块可能不完整："))}</b>
+    <details class="qc-details">
+      <summary>
+        <span class="qc fail">QC FAIL</span>
+        <b>${esc(qcSummaryText(blocks.length, blocks.length + failing.length))}</b>
+        <i class="qc-caret" aria-hidden="true">▸</i>
+      </summary>
       <ul>${items}</ul>
-    </div>`;
+      ${details}
+    </details>`;
 }
 
 /* ---------------------------------- narratives ---------------------------------- */
@@ -206,7 +221,14 @@ function qcNotice(d: Desk): string {
 function narrativeCard(n: Narrative): string {
   const from = pick(n.from_en, n.from_zh);
   const to = pick(n.to_en, n.to_zh);
-  const shift = from || to ? `<div class="shift-viz-wrap">${shiftSvg(from || "—", to || "—")}</div>` : "";
+  // Textual WAS → NOW flow instead of the old two-box diagram: the frames
+  // themselves are the content, boxes just got in the way.
+  const shift = from || to ? `
+    <div class="shift-flow">
+      ${from ? `<div class="sf-row past"><span class="sf-tag">${esc(L("WAS", "原来"))}</span><p>${esc(clip(from, 12))}</p></div>` : ""}
+      ${to ? `<div class="sf-arrow" aria-hidden="true">↓</div>
+      <div class="sf-row now"><span class="sf-tag">${esc(L("NOW", "现在"))}</span><p>${esc(clip(to, 12))}</p></div>` : ""}
+    </div>` : "";
   const rows = [
     [L("Driver", "驱动"), pick(n.driver_en, n.driver_zh)],
     [L("Why", "为什么"), pick(n.why_en, n.why_zh)],
@@ -413,14 +435,32 @@ function tickerBlock(ticker: TickerItem[]): string {
       const tone = x.tone ? TONE_CLS[x.tone.toLowerCase()] || "tone-neutral" : "tone-neutral";
       const paraphrase = x.verified === false
         ? ` <span class="tag emerging">${esc(L("paraphrase", "转述"))}</span>` : "";
+      // Attribution over provenance: who was on the hot seat matters more
+      // than which programme carried it.
+      const who = [x.guest, x.org].filter(Boolean).map(String);
       return `
       <div class="tick">
-        <span class="s">${d ? esc(d) : ""}${x.show ? ` · ${esc(x.show)}` : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i>${paraphrase}</span>
+        <span class="s">${d ? esc(d) : ""} <i class="tone-dot ${tone}" title="${esc(x.tone)}"></i>${paraphrase}</span>
         <p>${esc(clip(x.question, 14))}</p>
+        ${who.length ? `<span class="who">— ${esc(who.join(", "))}</span>` : ""}
       </div>`;
     })
     .join("");
   return `<div class="rail-sec"><header class="sec-head"><h2 class="sec-lab">${esc(L("On the tape", "采访动态"))}</h2></header><div>${body}</div></div>`;
+}
+
+/** Server-rendered term cloud: this edition's risers vs the previous one. */
+function wordCloudBlock(edition: string): string {
+  if (!edition) return "";
+  return `
+  <div class="rail-sec wc-pending">
+    <header class="sec-head"><h2 class="sec-lab">${esc(L("This week vs last", "本周对照词云"))}</h2></header>
+    <img src="/api/wordcloud/${encodeURIComponent(edition)}" alt="${esc(L("Word cloud comparing this week's rising terms with last week's", "对比本周与上周高频词的词云"))}"
+         loading="lazy"
+         onload="this.closest('.rail-sec').classList.remove('wc-pending')"
+         onerror="this.closest('.rail-sec').remove()">
+    <p class="s wc-cap">${esc(L("Red = rising this week. Generated from the week's transcripts.", "红色为本周上升词汇，基于本周节目转写生成。"))}</p>
+  </div>`;
 }
 
 function leadLagBlock(ll: LeadLag[]): string {
@@ -473,7 +513,6 @@ export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle:
   const lc = lifecycleIndex(lifecycle);
   const main =
     lead(desk, dd, lifecycle, prevEdition) +
-    qcNotice(desk) +
     tapeSection(desk.agenda || [], dd.episode_count ?? 0, lc) +
     weekAheadPanel(dd) +
     sec(L("Narrative shifts", "叙事转向"), L("what changed", "叙事如何转向"), `<div class="narr-grid">${(desk.narratives || []).map(narrativeCard).join("")}</div>`) +
@@ -489,10 +528,12 @@ export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle:
     `<div class="pair">
       ${interviewsPanel(desk.interview_groups)}
       ${prCounselPanel(dd.pr_counsel)}
-    </div>`;
+    </div>` +
+    qcDetails(desk);
   const rail =
     tickerBlock(asList(desk.ticker)) +
     leadLagBlock(asList<LeadLag>(desk.framing?.lead_lag)) +
+    wordCloudBlock(desk.edition) +
     watchlistBlock(dd) +
     pipelineBlock(sources);
   return `

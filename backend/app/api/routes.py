@@ -133,8 +133,10 @@ def _ticker(interviews: list[dict]) -> list[dict]:
         q = (i.get("questions") or [""])[0]
         snippet = " ".join(_normalized(q).split()[:8])
         verified = bool(snippet) and snippet in corpus[key]
-        out.append({"date": i["date"], "show": i["show"], "tone": i["tone"],
-                    "question": q[:160], "verified": verified})
+        out.append({"date": i["date"], "show": i["show"],
+                    "guest": i.get("guest"), "org": i.get("org"),
+                    "tone": i["tone"], "question": q[:160],
+                    "verified": verified})
     return out
 
 
@@ -153,6 +155,21 @@ def edition(eid: str):
     if not ed:
         raise HTTPException(404, "edition not found")
     return ed
+
+
+@router.get("/wordcloud/{eid}")
+def wordcloud(eid: str):
+    """This-week-vs-last term cloud as PNG; 404 when it cannot be produced."""
+    from fastapi import Response
+    from .. import wordcloud as wcgen
+    try:
+        png = wcgen.build_png(eid)
+    except Exception:
+        png = None
+    if not png:
+        raise HTTPException(status_code=404, detail="word cloud unavailable")
+    return Response(content=png, media_type="image/png",
+                    headers={"Cache-Control": "public, max-age=86400"})
 
 
 @router.get("/lifecycle")

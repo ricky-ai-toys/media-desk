@@ -194,6 +194,25 @@ def test_admin_qc(client):
     assert r.json()["status"] == "PASS"
 
 
+def test_wordcloud_endpoint(client):
+    """PNG when the generator can run (fixture has transcripts in chunks);
+    404 is equally acceptable where the wordcloud lib/font is unavailable."""
+    latest = client.get("/api/meta").json()["latest"]
+    r = client.get(f"/api/wordcloud/{latest}")
+    if r.status_code == 200:
+        assert r.headers["content-type"] == "image/png"
+        assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+    else:
+        assert r.status_code == 404
+
+
+def test_ticker_carries_guest(client):
+    latest = client.get("/api/meta").json()["latest"]
+    desk = client.get(f"/api/desk?edition={latest}").json()
+    for item in desk.get("ticker") or []:
+        assert "guest" in item
+
+
 def test_db_counts():
     with dbmod.conn() as c:
         eps = c.execute("SELECT COUNT(*) FROM episodes").fetchone()[0]
