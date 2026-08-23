@@ -68,7 +68,20 @@ export interface CommsBox {
   risky_en?: string;
   risky_zh?: string;
   questions_likely_en?: string[];
+  questions_likely_zh?: string[];
   evidence_to_prepare_en?: string[];
+  evidence_to_prepare_zh?: string[];
+}
+
+export interface PrCounsel {
+  risk_en?: string;
+  risk_zh?: string;
+  avoid_en?: string;
+  avoid_zh?: string;
+  opportunity_en?: string;
+  opportunity_zh?: string;
+  prepare_en?: string;
+  prepare_zh?: string;
 }
 
 export interface QuestionGroup {
@@ -85,6 +98,15 @@ export interface MediaExchange {
   lesson_en?: string;
   lesson_zh?: string;
   likely_to_recur?: boolean;
+}
+
+export interface InterviewGroup {
+  title_en?: string;
+  title_zh?: string;
+  role_en?: string;
+  role_zh?: string;
+  questions_en?: string[];
+  questions_zh?: string[];
 }
 
 export interface Watchpoint {
@@ -130,6 +152,9 @@ export interface DeskData {
   watchpoints?: Watchpoint[];
   evidence_statuses?: EvidenceStatus[];
   pr_counsel?: PrCounsel;
+  watchlist_en?: string[];
+  watchlist_zh?: string[];
+  warnings?: string[];
   recurring_questions_en?: Array<string | { text?: string; q?: string }>;
   recurring_questions_zh?: string[];
   week_ahead_events?: { date?: string; event_en?: string; event_zh?: string; why_en?: string; why_zh?: string }[];
@@ -177,10 +202,11 @@ export interface Desk {
   start: string;
   end: string;
   status: string;
-  qc: { status: string } | null;
+  qc: { status: string; blocked?: boolean; blocks?: string[] } | null;
   data: DeskData;
   agenda: AgendaItem[];
   narratives: Narrative[];
+  interview_groups?: InterviewGroup[];
   ticker?: TickerItem[];
   pressure?: PressureItem[];
   framing?: { collisions?: unknown[]; lead_lag?: LeadLag[] };

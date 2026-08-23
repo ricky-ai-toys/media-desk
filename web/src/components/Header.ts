@@ -78,10 +78,14 @@ export class Header {
     this.datelineEl.innerHTML = dateline(start, end);
   }
 
-  setQc(state: { status: string } | null): void {
+  setQc(state: { status: string; blocks?: string[] } | null): void {
     const ok = !!state && state.status === "PASS";
     this.qc.textContent = L(ok ? "QC PASS" : "QC FAIL", ok ? "质检通过" : "质检未通过");
     this.qc.className = `qc ${ok ? "pass" : "fail"}`;
+    const blocks = (state?.blocks ?? []).map(String).filter(Boolean);
+    this.qc.title = ok || !blocks.length
+      ? L("Editorial quality checks passed", "编辑质检全部通过")
+      : L("Blocked checks", "未通过项") + ": " + blocks.map((b) => b.replace(/_/g, " ")).join("; ");
   }
 
   private debouncedSearch(): void {

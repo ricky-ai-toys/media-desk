@@ -1,7 +1,7 @@
-import type { AgendaItem, Desk, DeskData, LeadLag, LifecycleTrack, Narrative, SourceHealth, TickerItem } from "../lib/api";
+import type { AgendaItem, Desk, DeskData, InterviewGroup, LeadLag, LifecycleTrack, Narrative, PrCounsel, SourceHealth, TickerItem } from "../lib/api";
 import { asList, esc } from "../lib/dom";
 import { clip, ellipsis, shortDate } from "../lib/format";
-import { DIR_ZH, EVID_ZH, dirLabel, L, pick, QCAT } from "../lib/i18n";
+import { DIR_ZH, EVID_ZH, dirLabel, getLang, L, pick, QCAT } from "../lib/i18n";
 import { MOM_ARROW, shiftSvg } from "../lib/svg";
 
 /* ---------------------------------- section scaffolding ---------------------------------- */
@@ -22,14 +22,20 @@ const empty = (): string => `<div class="empty">${L("Empty", "暂无数据")}</d
 function lead(d: Desk, dd: DeskData, lifecycle: LifecycleTrack[], prevEdition: string | null): string {
   const outlets = asList(dd.monitored_outlets).join(", ");
   const thesis = pick(dd.thesis_en, dd.thesis_zh) || pick(dd.week_summary_en, dd.week_summary_zh) || "—";
-  const i = thesis.indexOf(". ");
-  const headline = (i > 24 && i < 110 ? thesis.slice(0, i + 1) : ellipsis(thesis, 100)).trim();
-  const body = (i > 24 && i < 110 ? thesis.slice(i + 2) : "").trim();
+  // Headline = first sentence (or first em-dash clause for run-on leads),
+  // body = the remainder — the full thesis must stay on the page.
+  // EN punctuation must be followed by whitespace (avoids splitting "U.S.");
+  // CJK sentence marks stand alone.
+  const sent = thesis.match(/^([\s\S]{0,240}?(?:[.!?](?:\s+|$)|[。！？；]))/);
+  const dash = !sent ? thesis.match(/^([\s\S]{0,180}?)\s*[—–]\s*([\s\S]+)$/) : null;
+  const headline = (sent ? sent[1] ?? thesis : dash ? dash[1] ?? thesis : "").trim() || ellipsis(thesis, 150);
+  const rest = (sent ? thesis.slice((sent[0] ?? "").length) : dash ? dash[2] ?? "" : "").trim();
+  const body = rest ? clip(rest, 90) : "";
   return `
     <article class="lead">
-      <p class="kicker">${L("International Financial Media · Weekly Brief", "国际财经媒体 · 每周简报")}</p>
+      <p class="kicker">${esc(L("International Financial Media · Weekly Brief", "国际财经媒体 · 每周简报"))}</p>
       <h1 class="lead-h">${esc(headline)}</h1>
-      ${body ? `<p class="lead-body">${esc(clip(body, 25))}</p>` : ""}
+      ${body ? `<p class="lead-body">${esc(body)}</p>` : ""}
       <p class="lead-meta">
         <span>${L(d.status === "done" ? "Published" : "Draft", d.status === "done" ? "已发布" : "草稿")}</span>
         ${d.qc && d.qc.status === "PASS" ? `<span class="ok">QC PASS</span>` : ""}
@@ -90,8 +96,8 @@ function tapeRow(a: AgendaItem, i: number, episodes: number, lc: Map<string, Lif
   const arrow = MOM_ARROW[momentum] || "→";
   const dots = EVID_DOTS[evidence]?.[0] ?? 0;
   const dotStr = "●".repeat(dots) + "○".repeat(3 - dots);
-  const title = ellipsis(pick(a.title_en, a.title_zh), 10) || "—";
-  const sub = ellipsis(pick(a.summary_en, a.summary_zh), 22);
+  const title = ellipsis(pick(a.title_en, a.title_zh), 52) || "—";
+  const sub = ellipsis(pick(a.summary_en, a.summary_zh), 160);
   const prioLab = prio ? L(PRIO_LAB[prio as keyof typeof PRIO_LAB] || prio.toUpperCase(), DIR_ZH[prio] || prio.toUpperCase()) : "";
   const cls = PRIO_CLS[prio as keyof typeof PRIO_CLS] || "";
   const firstOpen = i === 0 ? " open" : "";
@@ -102,8 +108,7 @@ function tapeRow(a: AgendaItem, i: number, episodes: number, lc: Map<string, Lif
     a.driver_en || a.driver_zh ? [L("Driver", "驱动"), pick(a.driver_en, a.driver_zh)] : null,
     a.next_test_en || a.next_test_zh ? [L("Next test", "下一步检验"), pick(a.next_test_en, a.next_test_zh)] : null,
     a.stakes_en || a.stakes_zh ? [L("Who's exposed", "谁受影响"), pick(a.stakes_en, a.stakes_zh)] : null,
-  ].filter((f): f is [string, string] => !!f);
-  return `
+  ].filter((f): f is [string, string] => !!f);  return `
     <details class="glance ${cls}" style="--i:${i}"${firstOpen}>
       <summary class="g-row">
         <span class="g-no">${String(a.rank ?? i + 1).padStart(2, "0")}</span>
@@ -116,7 +121,7 @@ function tapeRow(a: AgendaItem, i: number, episodes: number, lc: Map<string, Lif
       <div class="cov-bar" aria-hidden="true"><i style="width:${pct}%"></i></div>
       <div class="g-body">
         ${sub ? `<p class="g-sub">${esc(sub)}</p>` : ""}
-        ${facts.length ? `<div class="facts-grid">${facts.map(([k, v]) => `<div class="fact"><div class="fact-k">${esc(k)}</div><div class="fact-v">${esc(ellipsis(v, 10))}</div></div>`).join("")}</div>` : ""}
+        ${facts.length ? `<div class="facts-grid">${facts.map(([k, v]) => `<div class="fact"><div class="fact-k">${esc(k)}</div><div class="fact-v">${esc(clip(v, 18))}</div></div>`).join("")}</div>` : !sub ? `<p class="g-sub s">${esc(L("Detail cells not generated for this item.", "该条目未生成详情格。"))}</p>` : ""}
         ${evidence ? `<div class="fact-k">${esc(L("Evidence", "证据"))} <span class="g-ev">${dotStr}</span></div>` : ""}
       </div>
     </details>`;
@@ -145,7 +150,13 @@ function tapeSection(agenda: AgendaItem[], episodeCount: number, lc: Map<string,
 
 function weekAheadPanel(dd: DeskData): string {
   const events = asList(dd.week_ahead_events);
-  if (!events.length) return "";
+  if (!events.length) {
+    return sec(
+      L("Week ahead", "下周展望"),
+      L("dates to watch", "关键日期"),
+      `<div class="empty">${L("Week-ahead calendar was not generated for this edition.", "本期未生成下周前瞻日历。")}</div>`,
+    );
+  }
   const rows = events
     .map((e) => {
       const d = (e.date || "").slice(5).replace("-", "/");
@@ -159,6 +170,35 @@ function weekAheadPanel(dd: DeskData): string {
     })
     .join("");
   return sec(L("Week ahead", "下周展望"), L("dates to watch", "关键日期"), `<div class="wk-cal">${rows}</div>`);
+}
+
+/* ---------------------------------- qc notice ---------------------------------- */
+
+const QC_HINT: Record<string, { en: string; zh: string }> = {
+  topic_facts_present: {
+    en: "agenda-topic fact cells (driver / next test / exposure) are missing",
+    zh: "议题事实格（驱动 / 下一步检验 / 谁受影响）缺失",
+  },
+  week_ahead_present: { en: "the week-ahead calendar section is missing", zh: "下周前瞻板块缺失" },
+};
+
+function qcNotice(d: Desk): string {
+  const qc = d.qc;
+  if (!qc || qc.status === "PASS") return "";
+  const blocks = asList(qc.blocks).map(String);
+  if (!blocks.length) return "";
+  const items = blocks
+    .map((b) => {
+      const h = QC_HINT[b];
+      const text = h ? L(h.en, h.zh) : b.replace(/_/g, " ");
+      return `<li>${esc(text)}</li>`;
+    })
+    .join("");
+  return `
+    <div class="qc-note" role="note">
+      <b>${esc(L("Editorial QC flagged this draft — sections may be incomplete:", "编辑质检标记本期草稿——部分板块可能不完整："))}</b>
+      <ul>${items}</ul>
+    </div>`;
 }
 
 /* ---------------------------------- narratives ---------------------------------- */
@@ -194,42 +234,67 @@ function narrativeCard(n: Narrative): string {
 
 function commsCards(dd: DeskData): string {
   const boxes = asList(dd.comms_boxes);
-  if (boxes.length) {
-    const cards = boxes
-      .map((b, i) => {
-        const Q = asList(b.questions_likely_en);
-        const E = asList(b.evidence_to_prepare_en);
-        return `
-        <details class="comms c${(i % 3) + 1}">
-          <summary class="comms-head">
-            <b class="comms-title">${esc(pick(b.title_en, b.title_zh) || "—")}</b>
-            <span class="comms-teaser">${esc(clip(pick(b.implication_en, b.implication_zh), 9))}</span>
-          </summary>
-          ${(pick(b.implication_en, b.implication_zh) || "").split(/\s+/).length > 9
-            ? `<p class="implication">${esc(clip(pick(b.implication_en, b.implication_zh), 14))}</p>` : ""}
-          ${Q.length ? `<span class="chunk-label" aria-hidden="true"></span><div class="chunk">${Q.map((q) => `<span class="chip">${esc(clip(q, 10))}</span>`).join("")}</div>` : ""}
-          ${E.length ? `<span class="chunk-label ev" aria-hidden="true"></span><div class="chunk ev">${E.map((e) => `<span class="chip">${esc(clip(e, 10))}</span>`).join("")}</div>` : ""}
-          ${b.risky_en ? `<div class="risky">${esc(L("Watch your tone", "注意表述"))} — ${esc(clip(pick(b.risky_en, b.risky_zh), 40))}</div>` : ""}
-        </details>`;
-      })
-      .join("");
-    return sec(L("Communications implications", "沟通启示"), L("general lessons for comms teams", "供沟通团队参考"), `<div class="comms-grid">${cards}</div>`);
-  }
-  const pr = dd.pr_counsel;
-  if (!pr || (!pr.risk_en && !pr.avoid_en)) return "";
-  return sec(
-    L("Communications", "沟通启示"),
-    L("general lessons", "公关提示"),
-    `<div class="comms-grid"><details class="comms c1">
-      <summary class="comms-head">
-        <b class="comms-title">${esc(L("Narrative risk", "叙事风险"))}</b>
-        <span class="comms-teaser">${esc(clip(pick(pr.risk_en, pr.risk_zh), 9))}</span>
-      </summary>
-      ${pr.risk_en ? `<p class="implication">${esc(clip(pick(pr.risk_en, pr.risk_zh), 50))}</p>` : ""}
-      ${pr.opportunity_en ? `<span class="chunk-label">${esc(L("Opportunity", "机遇"))}</span><p class="implication">${esc(clip(pick(pr.opportunity_en, pr.opportunity_zh), 40))}</p>` : ""}
-      ${pr.avoid_en ? `<div class="risky">${esc(clip(pick(pr.avoid_en, pr.avoid_zh), 40))}</div>` : ""}
-    </details></div>`,
-  );
+  if (!boxes.length) return "";
+  const zh = getLang() === "zh";
+  const cards = boxes
+    .map((b, i) => {
+      const impl = pick(b.implication_en, b.implication_zh);
+      const Q = asList(zh && b.questions_likely_zh?.length ? b.questions_likely_zh : b.questions_likely_en);
+      const E = asList(zh && b.evidence_to_prepare_zh?.length ? b.evidence_to_prepare_zh : b.evidence_to_prepare_en);
+      // CJK prose has no spaces — judge length by characters in zh mode.
+      const longImpl = zh ? impl.length > 42 : impl.split(/\s+/).length > 9;
+      return `
+      <details class="comms c${(i % 3) + 1}">
+        <summary class="comms-head">
+          <b class="comms-title">${esc(pick(b.title_en, b.title_zh) || "—")}</b>
+          <span class="comms-teaser">${esc(zh ? ellipsis(impl, 42) : clip(impl, 9))}</span>
+        </summary>
+        ${longImpl ? `<p class="implication">${esc(zh ? ellipsis(impl, 160) : clip(impl, 14))}</p>` : ""}
+        ${Q.length ? `<span class="chunk-label" aria-hidden="true"></span><div class="chunk">${Q.map((q) => `<span class="chip">${esc(clip(q, 10))}</span>`).join("")}</div>` : ""}
+        ${E.length ? `<span class="chunk-label ev" aria-hidden="true"></span><div class="chunk ev">${E.map((e) => `<span class="chip">${esc(clip(e, 10))}</span>`).join("")}</div>` : ""}
+        ${(b.risky_en || b.risky_zh) ? `<div class="risky">${esc(L("Watch your tone", "注意表述"))} — ${esc(clip(pick(b.risky_en, b.risky_zh), 40))}</div>` : ""}
+      </details>`;
+    })
+    .join("");
+  return sec(L("Communications implications", "沟通启示"), L("general lessons for comms teams", "供沟通团队参考"), `<div class="comms-grid">${cards}</div>`);
+}
+
+/* ---------------------------------- interview prep ---------------------------------- */
+
+function interviewsPanel(groups: InterviewGroup[] | undefined): string {
+  const gs = asList(groups);
+  if (!gs.length) return "";
+  const body = gs
+    .map((g) => {
+      const qs = asList(getLang() === "zh" && g.questions_zh?.length ? g.questions_zh : g.questions_en);
+      const role = pick(g.role_en, g.role_zh);
+      return `
+      <div class="qgroup">
+        <h3>${esc(pick(g.title_en, g.title_zh) || "—")}</h3>
+        ${role ? `<div class="ts-sub">${esc(role)}</div>` : ""}
+        <ul class="feed">${qs.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>
+      </div>`;
+    })
+    .join("");
+  return sec(L("Interview prep", "采访准备"), L("expected guests & lines of questioning", "预期嘉宾与提问方向"), body);
+}
+
+/* ---------------------------------- pr counsel ---------------------------------- */
+
+function prCounselPanel(pr: PrCounsel | undefined): string {
+  if (!pr) return "";
+  const rows = [
+    [L("Risk", "风险"), pick(pr.risk_en, pr.risk_zh)],
+    [L("Opportunity", "机遇"), pick(pr.opportunity_en, pr.opportunity_zh)],
+    [L("Prepare", "准备"), pick(pr.prepare_en, pr.prepare_zh)],
+    [L("Avoid", "避免"), pick(pr.avoid_en, pr.avoid_zh)],
+  ] as const;
+  const body = rows
+    .filter(([, v]) => v)
+    .map(([k, v]) => `<div class="dotline"><b class="dot" aria-hidden="true"></b><span class="tag">${esc(k)}</span><p>${esc(clip(v, 40))}</p></div>`)
+    .join("");
+  if (!body) return "";
+  return sec(L("PR counsel", "公关建议"), L("standing counsel for comms teams", "沟通团队常备提示"), body);
 }
 
 /* ---------------------------------- questions ---------------------------------- */
@@ -237,11 +302,12 @@ function commsCards(dd: DeskData): string {
 function questionsPanel(dd: DeskData): string {
   const groups = asList(dd.question_groups);
   if (groups.length) {
+    const zh = getLang() === "zh";
     const body = groups
       .map((g) => {
         const qc = QCAT[g.category || ""];
         const label = qc ? pick(qc.en, qc.zh) : g.category || "—";
-        const qs = asList(g.questions_en);
+        const qs = asList(zh && g.questions_zh?.length ? g.questions_zh : g.questions_en);
         return `
         <div class="qgroup">
           <h3>${esc(label)}</h3>
@@ -249,7 +315,7 @@ function questionsPanel(dd: DeskData): string {
         </div>`;
       })
       .join("");
-    const top = asList(dd.top_questions_next_week_en);
+    const top = asList(zh && dd.top_questions_next_week_zh?.length ? dd.top_questions_next_week_zh : dd.top_questions_next_week_en);
     const topBlock = top.length
       ? `<div class="ts-sub amber">${esc(L("Most likely to recur next week", "下周最可能继续追问"))}</div><ul class="feed">${top.map((q) => `<li>${esc(q)}</li>`).join("")}</ul>`
       : "";
@@ -318,11 +384,15 @@ function watchPanel(dd: DeskData): string {
 
 function evidencePanel(dd: DeskData): string {
   const es = asList(dd.evidence_statuses);
-  if (!es.length) return "";
+  const warns = asList(dd.warnings);
+  if (!es.length && !warns.length) return "";
   const body = es
     .map((e) => `<div class="list-row"><b>${esc(e.section || "—")}</b> <span class="tag ev-${esc(String(e.status || "emerging").toLowerCase())}">${esc(e.status || "—")}</span>${e.note ? ` <span class="s">· ${esc(e.note)}</span>` : ""}</div>`)
     .join("");
-  return sec(L("Evidence", "证据核查"), L("confidence behind the analysis", "分析背后的置信度"), body);
+  const notes = warns.length
+    ? `<div class="ts-sub amber">${esc(L("Editorial notes", "编者注"))}</div><ul class="feed muted">${warns.map((w) => `<li>${esc(typeof w === "string" ? w : JSON.stringify(w))}</li>`).join("")}</ul>`
+    : "";
+  return sec(L("Evidence", "证据核查"), L("confidence behind the analysis", "分析背后的置信度"), body + notes);
 }
 
 /* ---------------------------------- rail ---------------------------------- */
@@ -369,6 +439,17 @@ function leadLagBlock(ll: LeadLag[]): string {
   return `<div class="rail-sec"><header class="sec-head"><h2 class="sec-lab">${esc(L("Wire vs TV", "快讯与电视"))}</h2></header><div>${rows}</div></div>`;
 }
 
+function watchlistBlock(dd: DeskData): string {
+  const zh = getLang() === "zh";
+  const items = asList(zh && dd.watchlist_zh?.length ? dd.watchlist_zh : dd.watchlist_en);
+  if (!items.length) return "";
+  const rows = items
+    .slice(0, 7)
+    .map((w) => `<div class="tick"><p>${esc(clip(typeof w === "string" ? w : JSON.stringify(w), 14))}</p></div>`)
+    .join("");
+  return `<div class="rail-sec"><header class="sec-head"><h2 class="sec-lab">${esc(L("Carry-over watchlist", "延续观察清单"))}</h2></header><div>${rows}</div></div>`;
+}
+
 function pipelineBlock(sources: SourceHealth[]): string {
   if (!sources.length) return "";
   const rows = sources
@@ -392,6 +473,7 @@ export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle:
   const lc = lifecycleIndex(lifecycle);
   const main =
     lead(desk, dd, lifecycle, prevEdition) +
+    qcNotice(desk) +
     tapeSection(desk.agenda || [], dd.episode_count ?? 0, lc) +
     weekAheadPanel(dd) +
     sec(L("Narrative shifts", "叙事转向"), L("what changed", "叙事如何转向"), `<div class="narr-grid">${(desk.narratives || []).map(narrativeCard).join("")}</div>`) +
@@ -403,10 +485,15 @@ export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle:
     `<div class="pair">
       ${watchPanel(dd)}
       ${evidencePanel(dd)}
+    </div>` +
+    `<div class="pair">
+      ${interviewsPanel(desk.interview_groups)}
+      ${prCounselPanel(dd.pr_counsel)}
     </div>`;
   const rail =
     tickerBlock(asList(desk.ticker)) +
     leadLagBlock(asList<LeadLag>(desk.framing?.lead_lag)) +
+    watchlistBlock(dd) +
     pipelineBlock(sources);
   return `
     <div class="grid">
