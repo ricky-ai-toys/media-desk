@@ -281,12 +281,10 @@ function commsCards(dd: DeskData): string {
   return sec(L("Communications implications", "沟通启示"), L("general lessons for comms teams", "供沟通团队参考"), `<div class="comms-grid">${cards}</div>`);
 }
 
-/* ---------------------------------- interview prep ---------------------------------- */
+/* ---------------------------------- interview prep & pr counsel ---------------------------------- */
 
-function interviewsPanel(groups: InterviewGroup[] | undefined): string {
-  const gs = asList(groups);
-  if (!gs.length) return "";
-  const body = gs
+function interviewsBody(groups: InterviewGroup[]): string {
+  return groups
     .map((g) => {
       const qs = asList(getLang() === "zh" && g.questions_zh?.length ? g.questions_zh : g.questions_en);
       const role = pick(g.role_en, g.role_zh);
@@ -298,25 +296,41 @@ function interviewsPanel(groups: InterviewGroup[] | undefined): string {
       </div>`;
     })
     .join("");
-  return sec(L("Interview prep", "采访准备"), L("expected guests & lines of questioning", "预期嘉宾与提问方向"), body);
 }
 
-/* ---------------------------------- pr counsel ---------------------------------- */
-
-function prCounselPanel(pr: PrCounsel | undefined): string {
-  if (!pr) return "";
+function prCounselBody(pr: PrCounsel): string {
   const rows = [
     [L("Risk", "风险"), pick(pr.risk_en, pr.risk_zh)],
     [L("Opportunity", "机遇"), pick(pr.opportunity_en, pr.opportunity_zh)],
     [L("Prepare", "准备"), pick(pr.prepare_en, pr.prepare_zh)],
     [L("Avoid", "避免"), pick(pr.avoid_en, pr.avoid_zh)],
   ] as const;
-  const body = rows
+  return rows
     .filter(([, v]) => v)
     .map(([k, v]) => `<div class="dotline"><b class="dot" aria-hidden="true"></b><span class="tag">${esc(k)}</span><p>${esc(clip(v, 40))}</p></div>`)
     .join("");
-  if (!body) return "";
-  return sec(L("PR counsel", "公关建议"), L("standing counsel for comms teams", "沟通团队常备提示"), body);
+}
+
+/** One collapsed reference group near the foot of the page: everything a
+ *  comms team needs before facing cameras, without pushing analysis up. */
+function prepGroup(dd: DeskData, groups: InterviewGroup[] | undefined): string {
+  const gs = asList(groups);
+  const pr = dd.pr_counsel;
+  const hasPr = !!(pr && (pick(pr.risk_en, pr.risk_zh) || pick(pr.opportunity_en, pr.opportunity_zh) || pick(pr.prepare_en, pr.prepare_zh) || pick(pr.avoid_en, pr.avoid_zh)));
+  if (!gs.length && !hasPr) return "";
+  const parts: string[] = [];
+  if (gs.length) parts.push(`<div class="prep-sub"><div class="ts-sub">${esc(L("Interview prep — expected guests & lines of questioning", "采访准备——预期嘉宾与提问方向"))}</div>${interviewsBody(gs)}</div>`);
+  if (hasPr) parts.push(`<div class="prep-sub"><div class="ts-sub">${esc(L("PR counsel — standing counsel for comms teams", "公关建议——沟通团队常备提示"))}</div>${prCounselBody(pr as PrCounsel)}</div>`);
+  const count = gs.length ? `${gs.length} ${L(gs.length === 1 ? "guest group" : "guest groups", "组嘉宾")}${hasPr ? ` · ${esc(L("counsel", "建议"))}` : ""}` : esc(L("standing counsel", "常备提示"));
+  return `
+    <details class="prep-group">
+      <summary>
+        <b>${esc(L("Interview prep & PR counsel", "采访准备与公关建议"))}</b>
+        <span class="s">${count}</span>
+        <i class="qc-caret" aria-hidden="true">▸</i>
+      </summary>
+      <div class="prep-body">${parts.join("")}</div>
+    </details>`;
 }
 
 /* ---------------------------------- questions ---------------------------------- */
@@ -377,10 +391,9 @@ function exchangesPanel(dd: DeskData): string {
 
 /* ---------------------------------- watchpoints ---------------------------------- */
 
-function watchPanel(dd: DeskData): string {
+function watchBody(dd: DeskData): string {
   const ws = asList(dd.watchpoints);
-  if (!ws.length) return "";
-  const body = ws
+  return ws
     .map((w, i) => {
       const cells = [
         [L("Shift", "转向"), pick(w.shift_en, w.shift_zh)],
@@ -399,7 +412,12 @@ function watchPanel(dd: DeskData): string {
         </details>`;
     })
     .join("");
-  return sec(L("Watch next", "下周观察"), L("what would change the story", "哪些信号将改写叙事"), body);
+}
+
+/** Rail placement: signals that could rewrite the story live beside the tape ticker. */
+function watchRailBlock(dd: DeskData): string {
+  if (!asList(dd.watchpoints).length) return "";
+  return `<div class="rail-sec"><header class="sec-head"><h2 class="sec-lab">${esc(L("Watch next", "下周观察"))}</h2></header><div>${watchBody(dd)}</div></div>`;
 }
 
 /* ---------------------------------- evidence ---------------------------------- */
@@ -449,18 +467,24 @@ function tickerBlock(ticker: TickerItem[]): string {
   return `<div class="rail-sec"><header class="sec-head"><h2 class="sec-lab">${esc(L("On the tape", "采访动态"))}</h2></header><div>${body}</div></div>`;
 }
 
-/** Server-rendered term cloud: this edition's risers vs the previous one. */
-function wordCloudBlock(edition: string): string {
+/** Full-width comparison in the main column: last week's airwaves (muted)
+ *  beside this week's (ink, red risers). Each pane degrades independently;
+ *  the section falls back to a note only if both images fail. */
+function wordCloudSection(edition: string): string {
   if (!edition) return "";
-  return `
-  <div class="rail-sec wc-pending">
-    <header class="sec-head"><h2 class="sec-lab">${esc(L("This week vs last", "本周对照词云"))}</h2></header>
-    <img src="/api/wordcloud/${encodeURIComponent(edition)}" alt="${esc(L("Word cloud comparing this week's rising terms with last week's", "对比本周与上周高频词的词云"))}"
-         loading="lazy"
-         onload="this.closest('.rail-sec').classList.remove('wc-pending')"
-         onerror="this.closest('.rail-sec').remove()">
-    <p class="s wc-cap">${esc(L("Red = rising this week. Generated from the week's transcripts.", "红色为本周上升词汇，基于本周节目转写生成。"))}</p>
-  </div>`;
+  const pane = (which: "prev" | "this", label: string) => `
+    <figure class="wc-pane wc-pending ${which}">
+      <figcaption class="wc-lab">${esc(label)}</figcaption>
+      <img src="/api/wordcloud/${encodeURIComponent(edition)}?week=${which}" alt="${esc(L(`Word cloud of ${which === "prev" ? "last" : "this"} week's most-used transcript terms`, `周转写高频词云（${which === "prev" ? "上周" : "本周"}）`))}"
+           onload="this.closest('.wc-pane').classList.remove('wc-pending')"
+           onerror="var p=this.closest('.wc-pane');p.classList.add('wc-dead');var s=p.closest('.sec');if(s&&!s.querySelector('.wc-pane:not(.wc-dead)'))s.classList.add('wc-none')">
+    </figure>`;
+  return sec(
+    L("This week vs last", "本周对照词云"),
+    L("what dominated the airwaves — red marks this week's risers", "电波中的高频词——红色为本周上升词汇"),
+    `<div class="wc-grid">${pane("prev", L("Last week", "上周"))}${pane("this", L("This week", "本周"))}</div>
+     <div class="wc-fallback s">${esc(L("Word clouds unavailable for this edition.", "本期词云暂不可用。"))}</div>`,
+  );
 }
 
 function leadLagBlock(ll: LeadLag[]): string {
@@ -511,9 +535,14 @@ function pipelineBlock(sources: SourceHealth[]): string {
 export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle: LifecycleTrack[] = [], prevEdition: string | null = null): string {
   const dd = desk.data || ({} as DeskData);
   const lc = lifecycleIndex(lifecycle);
+  // Reading order, user-first: what happened (lead, tape), what it sounded
+  // like (clouds), what's coming (week ahead), how the story moved
+  // (narratives, comms), what people are asking (questions/exchanges),
+  // then reference material (prep/counsel collapsed, evidence, QC).
   const main =
     lead(desk, dd, lifecycle, prevEdition) +
     tapeSection(desk.agenda || [], dd.episode_count ?? 0, lc) +
+    wordCloudSection(desk.edition) +
     weekAheadPanel(dd) +
     sec(L("Narrative shifts", "叙事转向"), L("what changed", "叙事如何转向"), `<div class="narr-grid">${(desk.narratives || []).map(narrativeCard).join("")}</div>`) +
     commsCards(dd) +
@@ -521,19 +550,13 @@ export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle:
       ${questionsPanel(dd)}
       ${exchangesPanel(dd)}
     </div>` +
-    `<div class="pair">
-      ${watchPanel(dd)}
-      ${evidencePanel(dd)}
-    </div>` +
-    `<div class="pair">
-      ${interviewsPanel(desk.interview_groups)}
-      ${prCounselPanel(dd.pr_counsel)}
-    </div>` +
+    prepGroup(dd, desk.interview_groups) +
+    evidencePanel(dd) +
     qcDetails(desk);
   const rail =
     tickerBlock(asList(desk.ticker)) +
+    watchRailBlock(dd) +
     leadLagBlock(asList<LeadLag>(desk.framing?.lead_lag)) +
-    wordCloudBlock(desk.edition) +
     watchlistBlock(dd) +
     pipelineBlock(sources);
   return `

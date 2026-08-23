@@ -275,10 +275,27 @@ summary.narr-head::marker { content: ""; }
 /* Rail ticker attribution: who said it, not where it aired */
 .tick .who { display: block; font-weight: 600; color: var(--ink); font-size: 12px; margin-top: 2px; }
 
-/* Word cloud block — hidden until the PNG loads, removed on error */
+/* Word clouds — large last/this-week comparison in the main column */
+.wc-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+.wc-pane { margin: 0; border: 1px solid var(--hair); background: #fff; min-height: 150px; }
+.wc-pane img { width: 100%; height: auto; display: block; }
+.wc-lab { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--slate); padding: 8px 12px; border-bottom: 1px solid var(--hair); }
+.wc-pane.prev .wc-lab { color: var(--mist); }
 .wc-pending img { display: none; }
-.rail-sec img { width: 100%; height: auto; display: block; border: 1px solid var(--hair); }
-.wc-cap { margin: 6px 0 0; }
+.wc-dead { display: none; }
+.wc-none .wc-grid { display: none; }
+.wc-fallback { display: none; margin-top: 10px; }
+.wc-none .wc-fallback { display: block; }
+@media (max-width: 700px) { .wc-grid { grid-template-columns: 1fr; } }
+
+/* Interview prep & PR counsel — one collapsed reference group */
+.prep-group { border-top: 1px solid var(--hair); margin-top: 34px; padding-top: 12px; }
+.prep-group summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 12px; }
+.prep-group summary::-webkit-details-marker { display: none; }
+.prep-group summary b { font-family: var(--mono); font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; color: var(--ink); }
+.prep-group .qc-caret { color: var(--slate); font-style: normal; transition: transform .15s ease; margin-left: auto; }
+.prep-group[open] .qc-caret { transform: rotate(90deg); }
+.prep-sub + .prep-sub { margin-top: 24px; padding-top: 18px; border-top: 1px dashed var(--hair); }
 @keyframes flowPulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
 .narr-body { display: grid; gap: 9px; padding-top: 12px; }
 .dotline { display: flex; gap: 9px; align-items: flex-start; }

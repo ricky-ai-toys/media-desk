@@ -198,12 +198,14 @@ def test_wordcloud_endpoint(client):
     """PNG when the generator can run (fixture has transcripts in chunks);
     404 is equally acceptable where the wordcloud lib/font is unavailable."""
     latest = client.get("/api/meta").json()["latest"]
-    r = client.get(f"/api/wordcloud/{latest}")
-    if r.status_code == 200:
-        assert r.headers["content-type"] == "image/png"
-        assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
-    else:
-        assert r.status_code == 404
+    for week in ("this", "prev"):
+        r = client.get(f"/api/wordcloud/{latest}", params={"week": week})
+        if r.status_code == 200:
+            assert r.headers["content-type"] == "image/png"
+            assert r.content[:8] == b"\x89PNG\r\n\x1a\n"
+        else:
+            assert r.status_code == 404
+    assert client.get(f"/api/wordcloud/{latest}", params={"week": "nope"}).status_code == 400
 
 
 def test_ticker_carries_guest(client):

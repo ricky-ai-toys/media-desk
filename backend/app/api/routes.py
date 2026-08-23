@@ -158,12 +158,15 @@ def edition(eid: str):
 
 
 @router.get("/wordcloud/{eid}")
-def wordcloud(eid: str):
-    """This-week-vs-last term cloud as PNG; 404 when it cannot be produced."""
+def wordcloud(eid: str, week: str = "this"):
+    """Term-cloud PNG for the edition — `week=this` (ink + red risers) or
+    `week=prev` (muted last-week cloud); 404 when it cannot be produced."""
     from fastapi import Response
     from .. import wordcloud as wcgen
+    if week not in ("this", "prev"):
+        raise HTTPException(status_code=400, detail="week must be 'this' or 'prev'")
     try:
-        png = wcgen.build_png(eid)
+        png = wcgen.build_png(eid, week=week)
     except Exception:
         png = None
     if not png:
