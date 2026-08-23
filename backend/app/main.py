@@ -44,7 +44,24 @@ app.mount("/static", StaticFiles(directory=WEB), name="static")
 
 @app.get("/")
 def index():
-    return FileResponse(WEB / "index.html")
+    # Version the dist assets by build mtime: the HTML shell is never
+    # cached (DYNAMIC), so a changed ?v= forces CDNs/browsers to treat
+    # the bundle as a new object instead of serving a stale copy.
+    html = (WEB / "index.html").read_text(encoding="utf-8")
+    v = _asset_version()
+    html = html.replace("/static/dist/app.js", f"/static/dist/app.js?v={v}")
+    html = html.replace("/static/dist/app.css", f"/static/dist/app.css?v={v}")
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
+def _asset_version() -> int:
+    latest = 0
+    for name in ("app.js", "app.css"):
+        try:
+            latest = max(latest, int((WEB / "dist" / name).stat().st_mtime))
+        except OSError:
+            pass
+    return latest
 
 
 @app.get("/export/{edition_id}/{kind}")
