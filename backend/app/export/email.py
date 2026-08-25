@@ -84,7 +84,7 @@ def render_email(edition: dict) -> str:
     cards = ""
     for t in d.get("agenda_topics", []):
         badge = t.get("direction") or t.get("momentum") or "stable"
-        cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
+        cards += f"""<tr><td class="rank">{(t.get('rank') or 0):02d}</td><td class="card-body">
 <div class="card-title">{html.escape(t['title_en'])}<span class="badge {html.escape(badge)}">{badge.title()}</span></div>
 <div class="card-copy">{html.escape(first_sentence(t['summary_en'], 22))}</div></td></tr>"""
     narratives = d.get("narratives", [])
@@ -112,7 +112,7 @@ def render_email(edition: dict) -> str:
     watch = f"<h3>Carry-over watchlist</h3><ul>{watch}</ul>" if watch else ""
     zh_cards = ""
     for t in d.get("agenda_topics", []):
-        zh_cards += f"""<tr><td class="rank">{t['rank']:02d}</td><td class="card-body">
+        zh_cards += f"""<tr><td class="rank">{(t.get('rank') or 0):02d}</td><td class="card-body">
 <div class="card-title">{html.escape(t.get('title_zh', ''))}<span class="badge {html.escape(t.get('direction') or t.get('momentum') or 'stable')}">{(t.get('direction') or t.get('momentum') or 'stable').title()}</span></div>
 <div class="card-copy">{html.escape(first_sentence(t.get('summary_zh', ''), 22))}</div></td></tr>"""
     zh_groups = ""

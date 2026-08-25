@@ -124,4 +124,7 @@ both the synthesis prompt and the QC gate. Change numbers there, nowhere else.
   this host and remove `tls internal` for a Let's Encrypt cert.
 - /etc/hosts line `127.0.0.1 media.ricky.study` is used for local CLI/dev
   access; delete it if you move to public DNS.
+- PDF export renders via headless Chrome with `--no-sandbox` (required when the
+  service runs as root); it only ever prints server-generated HTML, never
+  remote input.
 - CNBC Asia TV full episodes are re-run unless the playlist becomes available.

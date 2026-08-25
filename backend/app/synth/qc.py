@@ -184,9 +184,9 @@ def run_qc(edition_id: str) -> dict:
         if not q["pass"] and q.get("blockable", True) and (legacy or q["check"] in blocking):
             blocks.append(q["check"])
 
-    passed_publish = not blocks and (legacy and all(q["pass"] for q in checks)
-                                     or not legacy and all(q["pass"] or not q.get("blockable", True)
-                                                           for q in checks))
+    legacy_ok = legacy and all(q["pass"] for q in checks)
+    v2_ok = (not legacy) and all(q["pass"] or not q.get("blockable", True) for q in checks)
+    passed_publish = not blocks and (legacy_ok or v2_ok)
     result = {"status": "PASS" if passed_publish else "FAIL",
               "blocked": bool(blocks), "checks": checks, "warnings": warnings, "blocks": blocks}
     with db.conn() as c:

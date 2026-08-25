@@ -126,15 +126,6 @@ export interface EvidenceStatus {
   note?: string;
 }
 
-export interface PrCounsel {
-  risk_en?: string;
-  risk_zh?: string;
-  avoid_en?: string;
-  avoid_zh?: string;
-  opportunity_en?: string;
-  opportunity_zh?: string;
-}
-
 export interface DeskData {
   report_title?: string;
   thesis_en?: string;

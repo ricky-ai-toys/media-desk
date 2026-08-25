@@ -1,6 +1,5 @@
 """Media Desk — FastAPI entry point. Serves the API + static web shell."""
 import datetime
-import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -12,14 +11,13 @@ from fastapi.staticfiles import StaticFiles
 from . import config
 from . import db
 from .api.admin import admin as admin_router
+from .api.routes import EDITION_ID_RE
 from .api.routes import router as public_router
 from .api.sse import event_stream
 from .export import media_export
 from .export.email import render_email
 
 WEB = Path(__file__).resolve().parents[2] / "web" / "static"
-
-_EDITION_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_to_\d{4}-\d{2}-\d{2}$")
 
 
 @asynccontextmanager
@@ -66,7 +64,7 @@ def _asset_version() -> int:
 
 @app.get("/export/{edition_id}/{kind}")
 def export(edition_id: str, kind: str):
-    if not _EDITION_RE.fullmatch(edition_id):
+    if not EDITION_ID_RE.fullmatch(edition_id):
         raise HTTPException(404, "edition not found")
     ed = db.edition_full(edition_id)
     if not ed:

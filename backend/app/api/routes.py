@@ -2,6 +2,7 @@
 import datetime
 import json
 import re
+from collections import Counter
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -14,6 +15,8 @@ from ..synth import weekly as synth
 from ..synth import qc
 
 router = APIRouter()
+
+EDITION_ID_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})$")
 
 
 def _public_pipeline(p: dict | None) -> dict | None:
@@ -54,9 +57,9 @@ def desk(edition: str | None = None):
         "data": ed["data"], "agenda": agenda, "narratives": ed["narratives"],
         "interview_groups": ed["interview_groups"],
         "framing": {
-            "collisions": framing.collisions(ed["id"]),
-            "lead_lag": framing.lead_lag(ed["id"]),
-            "asymmetry": framing.asymmetry(ed["id"]),
+            "collisions": framing.collisions(ed),
+            "lead_lag": framing.lead_lag(ed),
+            "asymmetry": framing.asymmetry(ed),
         },
         "attribution": _topic_attribution(ed["id"], agenda),
         "interviews": db.interview_entries(ed["id"], limit=120),
@@ -72,8 +75,11 @@ _STOP = {"the", "and", "for", "with", "that", "this", "from", "into", "its", "ar
 
 
 def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
-    """Which shows carried each agenda topic (FTS keyword match over chunk text)."""
-    from collections import Counter
+    """Which shows carried each agenda topic (keyword match over chunk text).
+
+    All keywords for a topic go into one OR-combined scan; DISTINCT keeps the
+    count at one hit per episode regardless of how many keywords matched.
+    """
     out = []
     with db.conn() as c:
         eps = [dict(r) for r in c.execute(
@@ -86,26 +92,25 @@ def _topic_attribution(edition_id: str, agenda: list[dict]) -> list[dict]:
         for a in agenda:
             text = f"{a.get('title_en') or ''} {a.get('summary_en') or ''}".lower()
             words = re.findall(r"[a-z]{4,}", text)
-            kws = [w for w in Counter(w for w in words if w not in _STOP).most_common(8)]
+            kws = [w for w, _ in Counter(w for w in words if w not in _STOP).most_common(8)]
             counts: Counter = Counter()
-            seen: set[str] = set()
-            for w, _ in kws:
+            if kws:
+                cond = " OR ".join("tc.text LIKE ?" for _ in kws)
                 rows = c.execute(
-                    "SELECT tc.episode_id FROM transcript_chunks tc "
-                    "JOIN episodes e ON e.id=tc.episode_id WHERE e.pub_date "
-                    "BETWEEN (SELECT start_date FROM editions WHERE id=?) "
-                    "AND (SELECT end_date FROM editions WHERE id=?) AND tc.text LIKE ?",
-                    (edition_id, edition_id, f"%{w}%")).fetchall()
+                    "SELECT DISTINCT tc.episode_id FROM transcript_chunks tc "
+                    "JOIN episodes e ON e.id=tc.episode_id JOIN editions ed ON ed.id=? "
+                    "WHERE e.pub_date BETWEEN ed.start_date AND ed.end_date "
+                    f"AND ({cond})",
+                    (edition_id, *[f"%{w}%" for w in kws])).fetchall()
                 for (eid,) in rows:
                     sn = show_of.get(eid)
-                    if sn and eid not in seen:
-                        seen.add(eid)
+                    if sn:
                         counts[sn] += 1
             per_show = [{"show": sn, "chunks": n} for sn, n in
                         counts.most_common(4)]
             out.append({"rank": a.get("rank"), "shows": per_show,
                         "total_episodes": len(eps),
-                        "covered": sum(n for _, n in counts.items())})
+                        "covered": sum(counts.values())})
     return out
 
 
@@ -123,20 +128,22 @@ def _ticker(interviews: list[dict]) -> list[dict]:
     flagged = [i for i in interviews if (i.get("tone") or "").lower() in ("challenging", "evasive")]
     corpus: dict[tuple, str] = {}
     out = []
-    for i in flagged[:8]:
-        key = (i.get("show") or "", i.get("date") or "")
-        if key not in corpus:
-            with db.conn() as c:
-                eps = [r["id"] for r in c.execute(
-                    "SELECT id FROM episodes WHERE show_name=? AND pub_date=?", key)]
-            corpus[key] = _normalized(" ".join(db.transcript_for(e) for e in eps))
-        q = (i.get("questions") or [""])[0]
-        snippet = " ".join(_normalized(q).split()[:8])
-        verified = bool(snippet) and snippet in corpus[key]
-        out.append({"date": i["date"], "show": i["show"],
-                    "guest": i.get("guest"), "org": i.get("org"),
-                    "tone": i["tone"], "question": q[:160],
-                    "verified": verified})
+    with db.conn() as c:
+        for i in flagged[:8]:
+            key = (i.get("show") or "", i.get("date") or "")
+            if key not in corpus:
+                rows = c.execute(
+                    "SELECT tc.text FROM transcript_chunks tc "
+                    "JOIN episodes e ON e.id=tc.episode_id "
+                    "WHERE e.show_name=? AND e.pub_date=?", key).fetchall()
+                corpus[key] = _normalized("\n".join(r["text"] for r in rows))
+            q = (i.get("questions") or [""])[0]
+            snippet = " ".join(_normalized(q).split()[:8])
+            verified = bool(snippet) and snippet in corpus[key]
+            out.append({"date": i["date"], "show": i["show"],
+                        "guest": i.get("guest"), "org": i.get("org"),
+                        "tone": i["tone"], "question": q[:160],
+                        "verified": verified})
     return out
 
 
@@ -165,6 +172,8 @@ def wordcloud(eid: str, week: str = "this"):
     from .. import wordcloud as wcgen
     if week not in ("this", "prev"):
         raise HTTPException(status_code=400, detail="week must be 'this' or 'prev'")
+    if not EDITION_ID_RE.fullmatch(eid):
+        raise HTTPException(status_code=404, detail="edition not found")
     try:
         png = wcgen.build_png(eid, week=week)
     except Exception:
@@ -188,9 +197,10 @@ def interviews(edition: str | None = None, q: str | None = None,
 
 @router.get("/framing")
 def framing_view(edition: str):
-    return {"collisions": framing.collisions(edition),
-            "lead_lag": framing.lead_lag(edition),
-            "asymmetry": framing.asymmetry(edition)}
+    ed = db.edition_full(edition)
+    return {"collisions": framing.collisions(ed),
+            "lead_lag": framing.lead_lag(ed),
+            "asymmetry": framing.asymmetry(ed)}
 
 
 @router.get("/radar")
@@ -198,7 +208,7 @@ def radar(edition: str | None = None):
     health = db.source_health()
     latest = db.latest_edition()
     eid = edition or (latest["id"] if latest else None)
-    m = re.fullmatch(r"(\d{4}-\d{2}-\d{2})_to_(\d{4}-\d{2}-\d{2})", eid or "")
+    m = EDITION_ID_RE.fullmatch(eid or "")
     if not m:
         raise HTTPException(404, "edition not found")
     try:
@@ -229,7 +239,7 @@ def _recent_articles(limit: int = 40) -> list[dict]:
 
 
 @router.get("/search")
-def search(q: str = Query(min_length=2), limit: int = 30):
+def search(q: str = Query(min_length=2), limit: int = Query(30, le=100)):
     return {"query": q, "results": db.query_fts(q, limit)}
 
 
