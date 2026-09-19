@@ -14,6 +14,8 @@ export interface SourceHealth {
   kind: string;
   episodes: number;
   articles: number;
+  last_episode: string | null;
+  stale: boolean;
   last_run: string | null;
   last_ok: number;
 }

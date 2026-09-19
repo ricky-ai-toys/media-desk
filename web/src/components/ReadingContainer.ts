@@ -1,5 +1,5 @@
 import { qs } from "../lib/dom";
-import type { Desk, LifecycleTrack, SourceHealth } from "../lib/api";
+import type { Desk, EditionMeta, LifecycleTrack, SourceHealth } from "../lib/api";
 import { renderBrief } from "../views/BriefView";
 import { renderSearch } from "../views/SearchView";
 
@@ -7,6 +7,7 @@ import { renderSearch } from "../views/SearchView";
 export class ReadingContainer {
   private readonly root: HTMLElement;
   private swapTimer: number | undefined;
+  private gapWeeks: EditionMeta[] = [];
   private current: {
     kind: "brief" | "search" | "error";
     desk?: Desk;
@@ -17,6 +18,11 @@ export class ReadingContainer {
 
   constructor(root: HTMLElement) {
     this.root = root;
+  }
+
+  /** Weeks withheld for lack of episode evidence — surfaced as a banner on the brief. */
+  setGapWeeks(weeks: EditionMeta[]): void {
+    this.gapWeeks = weeks;
   }
 
   showSkeleton(): void {
@@ -36,7 +42,7 @@ export class ReadingContainer {
 
   showBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle: LifecycleTrack[] = [], prevEdition: string | null = null): void {
     this.current = { kind: "brief", desk, sources, lifecycle, prevEdition };
-    this.swap(() => renderBrief(desk, sources, lifecycle, prevEdition));
+    this.swap(() => renderBrief(desk, sources, lifecycle, prevEdition, this.gapWeeks));
   }
 
   showSearch(query: string, results: { title?: string; source_name?: string | null; kind?: string; pub_date?: string | null; snip?: string | null }[]): void {

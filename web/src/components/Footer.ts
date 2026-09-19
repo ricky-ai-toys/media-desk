@@ -7,6 +7,7 @@ const STAGE_ZH: Record<string, string> = {
 
 const STATUS_ZH: Record<string, string> = {
   idle: "空闲", queued: "排队中", running: "进行中", done: "完成", failed: "失败",
+  blocked: "已阻断", skipped: "跳过",
 };
 
 /** Colophon: pipeline state + QC verdict (left) and a tabular clock (right). */

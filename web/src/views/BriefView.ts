@@ -1,4 +1,4 @@
-import type { AgendaItem, Desk, DeskData, InterviewGroup, LeadLag, LifecycleTrack, Narrative, PrCounsel, QcCheck, SourceHealth, TickerItem } from "../lib/api";
+import type { AgendaItem, Desk, DeskData, EditionMeta, InterviewGroup, LeadLag, LifecycleTrack, Narrative, PrCounsel, QcCheck, SourceHealth, TickerItem } from "../lib/api";
 import { asList, esc } from "../lib/dom";
 import { clip, ellipsis, shortDate } from "../lib/format";
 import { DIR_ZH, EVID_ZH, dirLabel, getLang, L, pick, QCAT } from "../lib/i18n";
@@ -518,12 +518,20 @@ function pipelineBlock(sources: SourceHealth[]): string {
   if (!sources.length) return "";
   const rows = sources
     .map((s) => {
-      const state = s.last_ok === 1 ? "ok" : s.last_ok === 0 ? "down" : s.last_run ? "ok" : "pending";
+      const isTv = s.kind === "yt_playlist";
+      const state = s.stale ? "stale" : s.last_ok === 1 ? "ok" : s.last_ok === 0 ? "down" : s.last_run ? "ok" : "pending";
       const when = s.last_run ? s.last_run.slice(0, 10) : L("never", "从未运行");
+      const count = isTv ? s.episodes : s.articles;
+      const unit = isTv ? L("ep", "期") : L("art", "篇");
+      const tip = s.stale
+        ? s.last_episode
+          ? L(`starving — last episode ${s.last_episode}`, `断粮 — 最近入库节目 ${s.last_episode}`)
+          : L("starving — no episode ever ingested", "断粮 — 从未有节目入库")
+        : "";
       return `
       <li>
-        <span class="dot ${state}" aria-hidden="true"></span>
-        <span class="dots"><b class="num">${s.articles}</b><i class="unit">${L("art", "篇")}</i> · ${esc(when)}</span>
+        <span class="dot ${state}" aria-hidden="true" ${tip ? `title="${esc(tip)}"` : ""}></span>
+        <span class="dots"><b class="num">${count}</b><i class="unit">${esc(unit)}</i> · ${esc(when)}</span>
       </li>`;
     })
     .join("");
@@ -532,14 +540,30 @@ function pipelineBlock(sources: SourceHealth[]): string {
 
 /* ---------------------------------- assemble ---------------------------------- */
 
-export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle: LifecycleTrack[] = [], prevEdition: string | null = null): string {
+export function renderBrief(desk: Desk, sources: SourceHealth[] = [], lifecycle: LifecycleTrack[] = [], prevEdition: string | null = null, gapWeeks: EditionMeta[] = []): string {
   const dd = desk.data || ({} as DeskData);
   const lc = lifecycleIndex(lifecycle);
+  const withheld = desk.status === "blocked_no_evidence" || desk.status === "synth_failed";
+  if (withheld) {
+    const warns = asList(dd.warnings).map((w) => `<p>${esc(String(w))}</p>`).join("");
+    const rail = pipelineBlock(sources);
+    return `<div class="grid"><div class="col-main">
+      <div class="sec"><div class="empty">${esc(L(
+        "This week was withheld from publication — no episode evidence was captured in the reporting window.",
+        "本期因采集窗口内无节目证据而暂缓发布。"))}</div>${warns}</div>
+    </div>${rail ? `<aside class="rail">${rail}</aside>` : ""}</div>`;
+  }
+  const gapBand = gapWeeks.length
+    ? `<div class="gap-band" role="status">${esc(L(
+        `Data gap: ${gapWeeks.map((g) => `${shortDate(g.start_date)} → ${shortDate(g.end_date)}`).join(", ")} withheld (no episode evidence). Showing the latest evidenced brief.`,
+        `数据缺口：${gapWeeks.map((g) => `${shortDate(g.start_date)} → ${shortDate(g.end_date)}`).join("、")} 因无节目证据暂缓发布，当前展示最近一期有证据的简报。`))}</div>`
+    : "";
   // Reading order, user-first: what happened (lead, tape), what it sounded
   // like (clouds), what's coming (week ahead), how the story moved
   // (narratives, comms), what people are asking (questions/exchanges),
   // then reference material (prep/counsel collapsed, evidence, QC).
   const main =
+    gapBand +
     lead(desk, dd, lifecycle, prevEdition) +
     tapeSection(desk.agenda || [], dd.episode_count ?? 0, lc) +
     wordCloudSection(desk.edition) +
