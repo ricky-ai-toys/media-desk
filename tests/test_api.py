@@ -24,6 +24,8 @@ def test_meta_latest_edition(client):
     d = r.json()
     assert d["latest"] and d["editions"], "seed data missing (run seed.py)"
     assert d["latest"] in {e["id"] for e in d["editions"]}
+    for s in d["sources"]:
+        assert "last_episode" in s and "stale" in s
 
 
 def test_desk_shape(client):
@@ -170,6 +172,8 @@ def test_export_email(client):
     assert r.status_code == 200
     assert "html" in r.headers["content-type"]
     assert "MEDIA" in r.text.upper() or "media" in r.text
+    # newsprint palette guard: the old blue gradient hero must not return
+    assert "#2458d3" not in r.text and "linear-gradient" not in r.text
 
 
 def test_export_unknown_kind_404(client):

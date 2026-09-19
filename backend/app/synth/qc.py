@@ -77,6 +77,11 @@ def run_qc(edition_id: str) -> dict:
     if not ed:
         return {"status": "FAIL", "blocked": True, "checks": [],
                 "warnings": ["edition not found"], "blocks": ["edition missing"]}
+    if ed["status"] in ("blocked_no_evidence", "synth_failed"):
+        # Withheld weeks have no editorial content to grade — never re-status them.
+        return {"status": "FAIL", "blocked": True, "checks": [],
+                "warnings": ["week withheld from synthesis — nothing to QC"],
+                "blocks": [ed["status"]]}
     data = ed["data"]
     checks = []
     manifest = ed["manifest"] or {}
@@ -96,7 +101,8 @@ def run_qc(edition_id: str) -> dict:
                 "evidence_status_vocab", "agenda_labeled",
                 "topic_facts_present", "week_ahead_present",
                 "pr_counsel_complete", "interview_groups_parallel",
-                "question_group_items_parallel")
+                "question_group_items_parallel",
+                "minimum_source_coverage", "source_manifest_saved")
 
     def add_v2(name, ok, detail):
         add(name, ok if not legacy else True,

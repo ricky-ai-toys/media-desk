@@ -47,6 +47,16 @@ def desk(edition: str | None = None):
         db.edition_full(latest["id"]) if latest else None)
     if not ed:
         raise HTTPException(404, "no edition found")
+    if ed["status"] in ("blocked_no_evidence", "synth_failed"):
+        # Withheld weeks render as a visible gap, not a half-empty report.
+        return {
+            "edition": ed["id"], "start": ed["start_date"], "end": ed["end_date"],
+            "status": ed["status"], "qc": None,
+            "data": ed["data"], "agenda": [], "narratives": [],
+            "interview_groups": [],
+            "framing": {"collisions": [], "lead_lag": [], "asymmetry": []},
+            "attribution": [], "interviews": [], "pressure": [], "ticker": [],
+        }
     agenda = list(ed["agenda"])
     for a in agenda:
         if isinstance(a.get("score"), (int, float)):
@@ -161,6 +171,12 @@ def edition(eid: str):
     ed = db.edition_full(eid)
     if not ed:
         raise HTTPException(404, "edition not found")
+    if ed["status"] in ("blocked_no_evidence", "synth_failed"):
+        # Same honesty as /desk: withheld weeks expose metadata + warnings only.
+        return {"id": ed["id"], "start_date": ed["start_date"],
+                "end_date": ed["end_date"], "status": ed["status"],
+                "data": ed["data"], "manifest": {}, "qc": None,
+                "agenda": [], "narratives": [], "interview_groups": []}
     return ed
 
 

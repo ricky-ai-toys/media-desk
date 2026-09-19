@@ -1,6 +1,6 @@
-"""Email export — renders a v5-layout-compatible bilingual HTML email from the
-DB edition (builds to templates/email_layout_reference.md: gradient hero,
-4 agenda cards, 2x2 narratives, 3 interview groups, 2x2 PR counsel, ZH mirror)."""
+"""Email export — renders the bilingual weekly email from the DB edition:
+newsprint hero, 4 agenda cards, 2x2 narratives, 3 interview groups,
+2x2 PR counsel, ZH mirror."""
 import html
 import re
 
@@ -19,55 +19,54 @@ def first_sentence(s: str, max_words: int = 22) -> str:
 
 
 CSS = """
-:root{--navy:#12233f;--blue:#2458d3;--light-blue:#edf3ff;--red:#c8394b;--light-red:#fff0f2;
---green:#197458;--light-green:#eaf8f2;--amber:#9b6308;--light-amber:#fff5df;}
-body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f4f6fa;color:#1a2233;}
-.shell{max-width:760px;margin:0 auto;background:#fff;}
-.hero{background:linear-gradient(135deg,#10213e 0%,#2458d3 70%,#6652b9 100%);color:#fff;
-padding:28px 32px;}
+:root{--ink:#161a1d;--accent:#a41f1b;--paper:#f6f1e7;--light-red:#f9ecea;
+--green:#14603c;--light-green:#e9f2ec;--amber:#96690f;--light-amber:#faf1dd;}
+body{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#eeece5;color:#3a4148;}
+.shell{max-width:760px;margin:0 auto;background:#fbfaf6;}
+.hero{background:#161a1d;color:#fff;padding:28px 32px;border-bottom:3px solid #a41f1b;}
 .hero .brand{font-size:11px;letter-spacing:2px;text-transform:uppercase;opacity:.85;}
-.hero h1{font-size:26px;margin:6px 0 2px;}
+.hero h1{font-size:26px;margin:6px 0 2px;font-family:Georgia,"Times New Roman",serif;}
 .hero .period{font-size:13px;opacity:.9;}
 .hero .deck{font-size:14px;opacity:.95;margin-top:10px;line-height:1.5;}
 .meta-row{display:flex;gap:12px;margin-top:16px;}
 .meta-cell{background:rgba(255,255,255,.12);border-radius:8px;padding:8px 12px;flex:1;
 font-size:12px;line-height:1.4;}
 .meta-cell b{display:block;font-size:16px;}
-section{padding:24px 32px;border-top:1px solid #e8ecf4;}
-h2{font-size:16px;color:var(--navy);margin:0 0 4px;}
-.intro{font-size:12px;color:#5b6577;margin-bottom:12px;}
-.summary-box{border-left:4px solid var(--blue);background:var(--light-blue);padding:10px 14px;
+section{padding:24px 32px;border-top:1px solid #e5e0d5;}
+h2{font-size:16px;color:var(--ink);margin:0 0 4px;font-family:Georgia,"Times New Roman",serif;}
+.intro{font-size:12px;color:#5a6370;margin-bottom:12px;}
+.summary-box{border-left:4px solid var(--accent);background:var(--paper);padding:10px 14px;
 font-size:13px;margin-bottom:14px;}
 .card-table{width:100%;border-collapse:collapse;}
-td.rank{font-family:Consolas,monospace;font-size:18px;color:var(--blue);width:44px;vertical-align:top;}
+td.rank{font-family:Consolas,monospace;font-size:18px;color:var(--accent);width:44px;vertical-align:top;}
 td.card-body{padding:0 8px 12px 0;}
 .card-title{font-weight:600;font-size:14px;}
-.card-copy{font-size:12.5px;color:#3a4358;margin-top:2px;line-height:1.45;}
+.card-copy{font-size:12.5px;color:#3a4148;margin-top:2px;line-height:1.45;}
 .badge{display:inline-block;font-size:10.5px;padding:2px 8px;border-radius:10px;margin-left:6px;
 vertical-align:2px;}
-.badge.rising{background:#fff0f2;color:#c8394b;}
-.badge.fading{background:#f1f3f7;color:#5b6577;}
-.badge.accelerating{background:#eaf8f2;color:#197458;}
-.badge.shifting{background:#fff5df;color:#9b6308;}
-.badge.stable{background:#edf3ff;color:#2458d3;}
+.badge.rising{background:#f9ecea;color:#a41f1b;}
+.badge.fading{background:#efece4;color:#5a6370;}
+.badge.accelerating{background:#e9f2ec;color:#14603c;}
+.badge.shifting{background:#faf1dd;color:#96690f;}
+.badge.stable{background:#161a1d;color:#f7f6f1;}
 .narrative-table{width:100%;border-collapse:collapse;}
-.narrative-table td{width:50%;border:1px solid #e4e9f2;padding:12px;vertical-align:top;}
-.narrative-table h3{font-size:13.5px;margin:0 0 6px;color:var(--navy);}
+.narrative-table td{width:50%;border:1px solid #ddd8cb;padding:12px;vertical-align:top;}
+.narrative-table h3{font-size:13.5px;margin:0 0 6px;color:var(--ink);}
 .shift{font-size:12px;font-weight:600;margin-bottom:6px;}
-.shift.from{color:var(--red);}
+.shift.from{color:var(--accent);}
 .shift.to{color:var(--green);}
-.narrative-table p{font-size:12.5px;color:#3a4358;margin:4px 0 0;line-height:1.5;}
-.group h3{font-size:13.5px;color:var(--navy);margin:14px 0 2px;}
-.group .role{font-size:12px;color:#5b6577;margin-bottom:6px;}
+.narrative-table p{font-size:12.5px;color:#3a4148;margin:4px 0 0;line-height:1.5;}
+.group h3{font-size:13.5px;color:var(--ink);margin:14px 0 2px;}
+.group .role{font-size:12px;color:#5a6370;margin-bottom:6px;}
 .group ul{margin:0 0 8px;padding-left:18px;}
-.group li{font-size:12.5px;color:#3a4358;margin-bottom:4px;line-height:1.45;}
+.group li{font-size:12.5px;color:#3a4148;margin-bottom:4px;line-height:1.45;}
 .pr-table{width:100%;border-collapse:collapse;margin-bottom:10px;}
-.pr-table td{width:50%;border:1px solid #e4e9f2;padding:12px;vertical-align:top;font-size:12.5px;line-height:1.5;}
+.pr-table td{width:50%;border:1px solid #ddd8cb;padding:12px;vertical-align:top;font-size:12.5px;line-height:1.5;}
 .pr-table td.risk{background:var(--light-red);} .pr-table td.opportunity{background:var(--light-green);}
-.pr-table td.prepare{background:var(--light-blue);} .pr-table td.avoid{background:var(--light-amber);}
+.pr-table td.prepare{background:var(--paper);} .pr-table td.avoid{background:var(--light-amber);}
 .pr-table h3{font-size:13px;margin:0 0 6px;}
-.lang-banner{background:var(--navy);color:#fff;padding:10px 32px;font-size:13px;}
-.footer{padding:16px 32px;font-size:11.5px;color:#5b6577;background:#f7f8fb;}
+.lang-banner{background:var(--ink);color:#fff;padding:10px 32px;font-size:13px;}
+.footer{padding:16px 32px;font-size:11.5px;color:#5a6370;background:#f2efe7;}
 @media(max-width:600px){.meta-row{flex-wrap:wrap;}.meta-cell{min-width:44%;}
 .narrative-table td,.pr-table td{width:100%;display:block;}}
 """
@@ -78,9 +77,20 @@ def render_email(edition: dict) -> str:
     man = edition["manifest"] or {}
     episodes = man.get("episodes", [])
     strands = len({e.get("program", "?") for e in episodes}) or 1
-    outlets = ", ".join(d.get("monitored_outlets", []))
+    outlets = ", ".join(str(o).replace(" (segment clips)", "")
+                        for o in d.get("monitored_outlets", []))
     days = len({e.get("date", "") for e in episodes if e.get("date")}) or 0
     srcs = d.get("source_file_count", len(episodes))
+    # The hero stat must not overclaim: clip-mode editions review segments,
+    # not whole programmes. Mixed weeks say so explicitly.
+    clip_eps = sum(1 for e in episodes
+                   if "(segment clips)" in str(e.get("program", "")))
+    if episodes and clip_eps == len(episodes):
+        reviewed_label = "clip segments reviewed"
+    elif clip_eps:
+        reviewed_label = f"programs reviewed ({clip_eps} clip-segment eps)"
+    else:
+        reviewed_label = "programs reviewed"
     cards = ""
     for t in d.get("agenda_topics", []):
         badge = t.get("direction") or t.get("momentum") or "stable"
@@ -128,7 +138,7 @@ def render_email(edition: dict) -> str:
 <div class="period">{d['start_date']} to {d['end_date']}</div>
 <div class="deck">{html.escape(d.get('week_summary_en', ''))}</div>
 <div class="meta-row">
-<div class="meta-cell"><b>{srcs}</b>programs reviewed</div>
+<div class="meta-cell"><b>{srcs}</b>{reviewed_label}</div>
 <div class="meta-cell"><b>{strands}</b>program strand(s)</div>
 <div class="meta-cell"><b>{days}</b>broadcast days</div>
 <div class="meta-cell"><b>{html.escape(outlets)}</b>source in this edition</div></div></div>

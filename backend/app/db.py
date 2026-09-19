@@ -3,7 +3,7 @@ import json
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from . import config
 from .tokens import kw, overlap
@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS pressure (
 CREATE INDEX IF NOT EXISTS idx_chunks_ep ON transcript_chunks(episode_id);
 CREATE INDEX IF NOT EXISTS idx_agenda_ed ON agenda_topics(edition_id);
 CREATE INDEX IF NOT EXISTS idx_entries_ed ON interview_entries(edition_id);
+CREATE INDEX IF NOT EXISTS idx_eps_source_pub ON episodes(source_id, pub_date);
 """
 
 TRIGGERS = """
@@ -335,6 +336,22 @@ def mark_edition_failed(start: str, end: str, error: str) -> str:
     return edition_id
 
 
+def mark_edition_blocked(start: str, end: str, reason: str) -> str:
+    """Record a week withheld from synthesis for lack of episode evidence,
+    so the gap is visible instead of papered over with a hollow report."""
+    edition_id = f"{start}_to_{end}"
+    with conn() as c:
+        c.execute(
+            "INSERT INTO editions (id, start_date, end_date, status, data_json, "
+            "manifest_json, qc_json, created_at) VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(id) DO UPDATE SET status='blocked_no_evidence' "
+            "WHERE editions.status IN ('blocked_no_evidence','synth_failed')",
+            (edition_id, start, end, "blocked_no_evidence",
+             json.dumps({"warnings": [f"blocked: {reason}"]}),
+             "{}", "{}", utcnow()))
+    return edition_id
+
+
 def replace_interview_entries(edition_id: str, entries: list[dict]):
     with conn() as c:
         c.execute("DELETE FROM interview_entries WHERE edition_id=?", (edition_id,))
@@ -402,7 +419,10 @@ def query_fts(q: str, limit: int = 30) -> list[dict]:
 
 def latest_edition() -> dict | None:
     with conn() as c:
-        row = c.execute("SELECT * FROM editions ORDER BY end_date DESC LIMIT 1").fetchone()
+        row = c.execute(
+            "SELECT * FROM editions "
+            "WHERE status NOT IN ('blocked_no_evidence', 'synth_failed') "
+            "ORDER BY end_date DESC LIMIT 1").fetchone()
         return dict(row) if row else None
 
 
@@ -487,14 +507,35 @@ def interview_entries(edition_id: str | None = None, q: str | None = None,
 
 def source_health(include_disabled: bool = False) -> list[dict]:
     where = "" if include_disabled else "WHERE s.enabled=1"
+    stale_days = int(config.FETCH.get("stale_days", 10))
     with conn() as c:
-        return [dict(r) for r in c.execute(
+        rows = [dict(r) for r in c.execute(
             "SELECT s.id, s.name, s.outlet, s.kind, "
             "(SELECT COUNT(*) FROM episodes e WHERE e.source_id=s.id) AS episodes, "
             "(SELECT COUNT(*) FROM articles a WHERE a.source_id=s.id) AS articles, "
+            "(SELECT MAX(e.pub_date) FROM episodes e WHERE e.source_id=s.id) AS last_episode, "
             "(SELECT ended_at FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_run, "
             "(SELECT ok FROM source_runs r WHERE r.source_id=s.id ORDER BY id DESC LIMIT 1) AS last_ok "
             f"FROM sources s {where} ORDER BY s.kind, s.name")]
+    # A TV source that has not landed an episode in stale_days is starving:
+    # ingest can report ok=True while the playlist yields zero matches.
+    # Zero episodes only counts as starving after the first run has completed;
+    # a future-dated last_episode is a data fault, not evidence of health.
+    today = datetime.now(timezone.utc).date()
+    for r in rows:
+        stale = False
+        if r["kind"] == "yt_playlist":
+            last = r.get("last_episode")
+            if not last:
+                stale = r.get("last_run") is not None
+            else:
+                try:
+                    age = (today - date.fromisoformat(str(last))).days
+                    stale = not (0 <= age <= stale_days)
+                except ValueError:
+                    stale = True
+        r["stale"] = stale
+    return rows
 
 
 def coverage_radar(edition_id: str) -> dict:

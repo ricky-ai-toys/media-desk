@@ -69,6 +69,10 @@ def export(edition_id: str, kind: str):
     ed = db.edition_full(edition_id)
     if not ed:
         raise HTTPException(404, "edition not found")
+    if ed["status"] in ("blocked_no_evidence", "synth_failed") and kind in ("email", "pdf"):
+        # Withheld weeks carry no editorial content — render_email would crash
+        # on the missing payload keys.
+        raise HTTPException(409, "week withheld — no report content to export")
     if kind == "csv":
         return PlainTextResponse(media_export.agenda_csv(ed), media_type="text/csv",
                                  headers={"Content-Disposition": f'attachment; filename="agenda_{edition_id}.csv"'})
