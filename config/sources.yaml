@@ -3,6 +3,23 @@
 # yt_playlist entries produce full transcripts; rss entries produce article
 # headline/summary items (framing + coverage only, no quotes).
 # Add a source here without touching code — adapters are generic.
+#
+# yt_playlist per-source keys:
+#   title_regex:  rows whose title matches are ingest candidates (".+" = all).
+#   content:      "clips" marks the show label "(segment clips)" and lets
+#                 min_transcript_words be per-source (lower bar for segments).
+#   scan_limit:   how many playlist rows to scan per run (default 30). Clip
+#                 playlists post many undated segments daily — a low limit
+#                 saturates and silently starves the back half of the window.
+#   proxy_url:    per-source proxy (e.g. "http://host:port") for playlists
+#                 country-locked against this egress; else set fetch.proxy_url
+#                 globally. Applied to yt-dlp playlist scan, date probes,
+#                 and caption downloads.
+#
+# Dates: rows whose flat-playlist upload_date comes back NA and whose title
+# carries no date get resolved by a batched single-video probe, capped at
+# fetch.max_date_probes per run (oldest pending first; the rest are logged
+# as "probe-deferred" and retried next run).
 
 sources:
   - id: bloomberg_asia_trade
@@ -11,8 +28,12 @@ sources:
     kind: yt_playlist
     playlist_id: "PLGaYlBJIOoa8zJLXejV8ZIXJydxAMu-kW"
     playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa8zJLXejV8ZIXJydxAMu-kW"
-    title_regex: "The Asia Trade\\s+\\d{1,2}/\\d{1,2}/\\d{4}"
+    title_regex: ".+"
+    content: clips
+    min_transcript_words: 200
+    scan_limit: 100
     enabled: true
+    note: "Clip-mode since 2026-09-19: dated full episodes no longer uploaded after 9/9/2026; playlist still carries daily undated clips (EN manual captions verified on server 2026-09-19). Episodes surface as 'The Asia Trade (segment clips)'."
 
   - id: bloomberg_china_show
     name: "The China Show"
@@ -20,8 +41,12 @@ sources:
     kind: yt_playlist
     playlist_id: "PLGaYlBJIOoa94hnb-z2i64eVPcGZPUvo9"
     playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa94hnb-z2i64eVPcGZPUvo9"
-    title_regex: "The China Show\\s*(?:\\|\\s*)?\\d{1,2}/\\d{1,2}/\\d{4}"
+    title_regex: ".+"
+    content: clips
+    min_transcript_words: 200
+    scan_limit: 100
     enabled: true
+    note: "Clip-mode since 2026-09-19: dated full episodes no longer uploaded after 9/8/2026; daily undated clips verified (EN manual captions, server 2026-09-19). Episodes surface as 'The China Show (segment clips)'."
 
   - id: bloomberg_insight
     name: "Insight with Haslinda Amin"
@@ -29,8 +54,12 @@ sources:
     kind: yt_playlist
     playlist_id: "PLGaYlBJIOoa_6-KXq8HBmOQcs62Qfvdv2"
     playlist_url: "https://www.youtube.com/playlist?list=PLGaYlBJIOoa_6-KXq8HBmOQcs62Qfvdv2"
-    title_regex: "Insight with Haslinda Amin\\s*(?:\\|\\s*)?\\d{1,2}/\\d{1,2}/\\d{4}"
+    title_regex: ".+"
+    content: clips
+    min_transcript_words: 200
+    scan_limit: 100
     enabled: true
+    note: "Clip-mode since 2026-09-19: dated full episodes no longer uploaded after 9/8/2026; daily undated clips verified (EN manual captions, server 2026-09-19). Episodes surface as 'Insight with Haslinda Amin (segment clips)'."
 
   - id: cnbc_wire
     name: "CNBC Markets"
@@ -51,30 +80,52 @@ sources:
     title_regex: ".+"
     content: clips
     min_transcript_words: 200
+    scan_limit: 100
     enabled: true
     note: "Clip-mode source (GO 2026-08-23: 10/10 playlist matches, EN auto-captions ~1.6k words/clip). Episodes surface as 'Squawk Box Asia (segment clips)' in the sample frame."
 
-  - id: cnbc_china_connection
-    name: "The China Connection"
-    outlet: "CNBC Asia"
-    kind: yt_playlist
-    playlist_id: "PLJ8IrgLlRTditXsd7Ii0nq33MpZ2Esd_2"
-    # Official 'Watch In Full' playlist — daily full episodes,
-    # titled "The China Connection - DD-MMM-YY".
-    playlist_url: "https://www.youtube.com/playlist?list=PLJ8IrgLlRTditXsd7Ii0nq33MpZ2Esd_2"
-    title_regex: "China Connection.*"
-    enabled: false
-    note: "Full-episode playlist confirmed 2026-08-23. Geo-restricted in some regions — run scripts/verify_sources.py cnbc_china_connection on the server; enable only on GO."
+  # cnbc_china_connection / cnbc_street_signs_asia retired 2026-09: CNBC closed
+  # its Hong Kong bureau (2026-09-03) and cancelled these daily live shows;
+  # neither was ever enabled or ingested.
 
-  - id: cnbc_street_signs_asia
-    name: "Street Signs Asia"
-    outlet: "CNBC Asia"
+  - id: cnbc_squawk_box_us
+    name: "Squawk Box (US)"
+    outlet: "CNBC"
     kind: yt_playlist
-    playlist_id: ""
-    playlist_url: "https://www.youtube.com/@CNBCtelevision/videos"
-    title_regex: "Street Signs Asia.*"
-    enabled: false
-    note: "No official full-episode source found (2026-08-23): channel playlist is segment clips without captions. Keep disabled unless a full-episode source appears."
+    playlist_id: "PLVbP054jv0KptiGrqXv0nlwHjV9EqOptT"
+    playlist_url: "https://www.youtube.com/playlist?list=PLVbP054jv0KptiGrqXv0nlwHjV9EqOptT"
+    title_regex: ".+"
+    content: clips
+    min_transcript_words: 200
+    scan_limit: 100
+    enabled: true
+    note: "GO 2026-09-19 (verify_sources): 10/10 playlist matches, date via probe, EN auto-captions ~1.4k words/clip; CNBC Television US Squawk Box clips, not geo-blocked from HK egress."
+
+  # CNBC 'Watch In Full' full-episode playlists (e.g. Squawk Box Asia
+  # PLJ8IrgLlRTdiFCPPEbWpKaNnWCzRsV-sd, updated daily to 17-Sep-26) are
+  # uploader country-locked and unreachable from this HK egress — add a
+  # proxy_url (SG/JP/US exit) and run verify_sources before enabling.
+
+  - id: scmp_china
+    name: "SCMP China"
+    outlet: "South China Morning Post"
+    kind: rss
+    feed_url: "https://www.scmp.com/rss/4/feed"
+    enabled: true
+
+  - id: bbc_business
+    name: "BBC Business"
+    outlet: "BBC"
+    kind: rss
+    feed_url: "https://feeds.bbci.co.uk/news/business/rss.xml"
+    enabled: true
+
+  - id: cnbc_finance
+    name: "CNBC Finance"
+    outlet: "CNBC"
+    kind: rss
+    feed_url: "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10000664"
+    enabled: true
 
   - id: wire_markets
     name: "Market News Wire"
@@ -110,6 +161,10 @@ fetch:
   min_transcript_words: 500
   transcript_dir: "/home/rickyubuntu/workspace/media-desk/data/transcripts"
   use_auto_subs_fallback: true
+  max_date_probes: 15
+  # A weekly TV feed that hasn't landed an episode in 4 days is broken or
+  # cancelled — 10 days hid the September starvation for a whole week.
+  stale_days: 4
 
 analysis:
   model: "deepseek-v4-flash"

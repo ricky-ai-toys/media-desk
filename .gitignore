@@ -16,3 +16,5 @@ web/static/dist/
 .superpowers/
 core_logic_for_review.zip
 data/wordclouds/
+data/llm_raw/
+data/fixture-media.db-*

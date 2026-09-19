@@ -14,6 +14,8 @@ export interface SourceHealth {
   kind: string;
   episodes: number;
   articles: number;
+  last_episode: string | null;
+  stale: boolean;
   last_run: string | null;
   last_ok: number;
 }
@@ -124,15 +126,6 @@ export interface EvidenceStatus {
   section?: string;
   status?: string;
   note?: string;
-}
-
-export interface PrCounsel {
-  risk_en?: string;
-  risk_zh?: string;
-  avoid_en?: string;
-  avoid_zh?: string;
-  opportunity_en?: string;
-  opportunity_zh?: string;
 }
 
 export interface DeskData {

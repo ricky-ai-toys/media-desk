@@ -77,6 +77,11 @@ def run_qc(edition_id: str) -> dict:
     if not ed:
         return {"status": "FAIL", "blocked": True, "checks": [],
                 "warnings": ["edition not found"], "blocks": ["edition missing"]}
+    if ed["status"] in ("blocked_no_evidence", "synth_failed"):
+        # Withheld weeks have no editorial content to grade — never re-status them.
+        return {"status": "FAIL", "blocked": True, "checks": [],
+                "warnings": ["week withheld from synthesis — nothing to QC"],
+                "blocks": [ed["status"]]}
     data = ed["data"]
     checks = []
     manifest = ed["manifest"] or {}
@@ -96,7 +101,8 @@ def run_qc(edition_id: str) -> dict:
                 "evidence_status_vocab", "agenda_labeled",
                 "topic_facts_present", "week_ahead_present",
                 "pr_counsel_complete", "interview_groups_parallel",
-                "question_group_items_parallel")
+                "question_group_items_parallel",
+                "minimum_source_coverage", "source_manifest_saved")
 
     def add_v2(name, ok, detail):
         add(name, ok if not legacy else True,
@@ -184,9 +190,9 @@ def run_qc(edition_id: str) -> dict:
         if not q["pass"] and q.get("blockable", True) and (legacy or q["check"] in blocking):
             blocks.append(q["check"])
 
-    passed_publish = not blocks and (legacy and all(q["pass"] for q in checks)
-                                     or not legacy and all(q["pass"] or not q.get("blockable", True)
-                                                           for q in checks))
+    legacy_ok = legacy and all(q["pass"] for q in checks)
+    v2_ok = (not legacy) and all(q["pass"] or not q.get("blockable", True) for q in checks)
+    passed_publish = not blocks and (legacy_ok or v2_ok)
     result = {"status": "PASS" if passed_publish else "FAIL",
               "blocked": bool(blocks), "checks": checks, "warnings": warnings, "blocks": blocks}
     with db.conn() as c:

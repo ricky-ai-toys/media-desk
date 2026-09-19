@@ -100,9 +100,8 @@ def _analyses_for_week(start: str, end: str) -> list[dict]:
             (start, end))]
 
 
-def collisions(edition_id: str) -> list[dict]:
+def collisions(ed: dict | None) -> list[dict]:
     """Same-topic framing fights inside one edition, with show-level evidence."""
-    ed = db.edition_full(edition_id)
     if not ed:
         return []
     topics = ed["data"].get("agenda_topics", [])
@@ -140,9 +139,8 @@ def _week_episode_topics(start: str, end: str) -> list[dict]:
             "WHERE e.pub_date>=? AND e.pub_date<=?", (start, end))]
 
 
-def lead_lag(edition_id: str) -> list[dict]:
+def lead_lag(ed: dict | None) -> list[dict]:
     """Per agenda topic: first TV mention, first wire mention, wire lead in days."""
-    ed = db.edition_full(edition_id)
     if not ed:
         return []
     with db.conn() as c:
@@ -176,9 +174,8 @@ def lead_lag(edition_id: str) -> list[dict]:
     return out
 
 
-def asymmetry(edition_id: str) -> list[dict]:
+def asymmetry(ed: dict | None) -> list[dict]:
     """Blind spots: top topics absent from shows that carried other agenda items."""
-    ed = db.edition_full(edition_id)
     if not ed:
         return []
     eps = _week_episode_topics(ed["start_date"], ed["end_date"])

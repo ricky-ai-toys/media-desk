@@ -1,6 +1,6 @@
 import "./styles.css";
 import { qs } from "./lib/dom";
-import { api, type Desk, type LifecycleTrack, type Meta } from "./lib/api";
+import { api, type Desk, type EditionMeta, type LifecycleTrack, type Meta } from "./lib/api";
 import { getLang } from "./lib/i18n";
 import { Header } from "./components/Header";
 import { ReadingContainer } from "./components/ReadingContainer";
@@ -16,6 +16,13 @@ const state: { edition: string | null; desk: Desk | null; meta: Meta | null; lif
 function prevEditionOf(meta: Meta, edition: string): string | null {
   const eds = (meta.editions || []).filter((e) => (e.id ?? "") < edition);
   return eds.length ? (eds[eds.length - 1]?.id ?? null) : null;
+}
+
+function gapWeeksOf(meta: Meta): EditionMeta[] {
+  const latestEnd = meta.editions.find((e) => e.id === meta.latest)?.end_date ?? "";
+  return meta.editions.filter((e) =>
+    (e.status === "blocked_no_evidence" || e.status === "synth_failed") &&
+    (e.end_date ?? "") > latestEnd);
 }
 
 function setTitle(edition: string, lang: "en" | "zh"): void {
@@ -90,6 +97,7 @@ async function boot(): Promise<void> {
     state.meta = meta;
     state.lifecycle = lifecycle.tracks || [];
     header.populateEditions(meta.editions, meta.latest);
+    reading.setGapWeeks(gapWeeksOf(meta));
     footer.setPipe(meta.pipeline ?? {});
     if (meta.latest && !state.edition) {
       state.edition = meta.latest;
@@ -111,7 +119,9 @@ function wireSse(): void {
     try {
       const p = JSON.parse(ev.data) as { stage?: string; status?: string };
       footer.setPipe(p);
-      if (p.status === "done") void boot();
+      // "blocked" also re-boots: the withheld week changes which edition is
+      // latest and lights the gap banner — neither is visible without a reload.
+      if (p.status === "done" || p.status === "blocked") void boot();
     } catch {
       /* ignore malformed frames */
     }

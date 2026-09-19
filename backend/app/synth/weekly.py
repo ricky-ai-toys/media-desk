@@ -90,9 +90,25 @@ def synthesize_week(start: str, end: str, force: bool = False) -> dict:
     """Weekly editorial synthesis. Evidence -> compact digest -> one LLM call
     (context kept lean so the delegation stays well under the timeout rule)."""
     edition_id = f"{start}_to_{end}"
+    WITHHELD = ("blocked_no_evidence", "synth_failed")
     existing = db.edition_full(edition_id)
-    if existing and not force:
+    if existing and not force and existing["status"] not in WITHHELD:
         return {"edition": edition_id, "exists": True, "message": "already present"}
+    with db.conn() as c:
+        n_eps = c.execute(
+            "SELECT COUNT(*) FROM episodes WHERE pub_date>=? AND pub_date<=?",
+            (start, end)).fetchone()[0]
+    if not n_eps:
+        # Never spend an LLM call on a week with zero episode evidence —
+        # the model would only hallucinate a hollow report.
+        if existing is None or existing["status"] in WITHHELD:
+            edition_id = db.mark_edition_blocked(start, end, "no episode evidence in window")
+            return {"edition": edition_id, "blocked": True,
+                    "reason": "no episode evidence in window"}
+        # A published edition stays published — backfilling can't retroactively
+        # withhold a week whose report already went out.
+        return {"edition": edition_id, "exists": True,
+                "message": "already published; evidence still zero"}
     evidence = agenda_evidence(start, end)
     monitor = interview_monitor(start, end)
     digest = _episode_digest(start, end)

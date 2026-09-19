@@ -1,6 +1,6 @@
 import { qs } from "../lib/dom";
 import { shortDate } from "../lib/format";
-import { setLang, getLang, type Lang } from "../lib/i18n";
+import { L, setLang, getLang, type Lang } from "../lib/i18n";
 import type { EditionMeta } from "../lib/api";
 
 export interface EditionSwitcherCallbacks {
@@ -41,7 +41,9 @@ export class EditionSwitcher {
     for (const e of editions) {
       const o = document.createElement("option");
       o.value = e.id;
-      o.textContent = `${shortDate(e.start_date)} → ${shortDate(e.end_date)}`;
+      const withheld = e.status === "blocked_no_evidence" || e.status === "synth_failed";
+      o.textContent = `${shortDate(e.start_date)} → ${shortDate(e.end_date)}`
+        + (withheld ? ` · ${L("data gap", "数据缺口")}` : "");
       this.sel.appendChild(o);
     }
     if (latest) this.sel.value = latest;

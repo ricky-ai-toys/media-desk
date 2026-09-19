@@ -2,7 +2,8 @@
 
 Covers: server-side coverage overrides, rule-based evidence statuses,
 synth_failed marker, LLM retry/backoff, pr_counsel no-stitch gate,
-per-field figure alignment, week-ahead weekday rule, bilingual parity gates.
+per-field figure alignment, week-ahead weekday rule, bilingual parity gates,
+zero-evidence hard gate, stale-source flags.
 """
 import json
 import os
@@ -298,3 +299,149 @@ def test_figure_year_rollover_no_false_positive(tmp_path, monkeypatch):
     r = _run(tmp_path, monkeypatch, data)
     check = next(c for c in r["checks"] if c["check"] == "en_zh_figures_align")
     assert check["pass"], check["detail"]
+
+
+# --- zero-evidence hard gate ---------------------------------------------------
+
+def test_zero_evidence_week_blocked_without_llm(week_db, monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("LLM must not be called for an unevidenced week")
+    monkeypatch.setattr(weekly.llm, "chat_json", never)
+    out = weekly.synthesize_week("2026-09-14", "2026-09-18")
+    assert out["blocked"] is True
+    ed = db.edition_full("2026-09-14_to_2026-09-18")
+    assert ed["status"] == "blocked_no_evidence"
+    assert any("no episode evidence" in w for w in ed["data"]["warnings"])
+
+
+def test_latest_edition_skips_blocked_week(week_db, monkeypatch):
+    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
+    weekly.synthesize_week(W_START, W_END)  # evidenced August week
+    weekly.synthesize_week("2026-09-14", "2026-09-18")  # newer but empty
+    assert db.latest_edition()["id"] == f"{W_START}_to_{W_END}"
+
+
+def test_blocked_week_resynthesizes_after_backfill(week_db, monkeypatch):
+    """Critical #1 regression: a withheld week must be re-synthesizable once
+    ingest catches up, without the caller having to pass force=True."""
+    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
+    assert weekly.synthesize_week("2026-09-14", "2026-09-18")["blocked"] is True
+    db.upsert_episode({"id": "bk1", "source_id": "bloomberg_asia_trade",
+                       "title": "The Asia Trade 2026-09-15",
+                       "show_name": "The Asia Trade (segment clips)",
+                       "pub_date": "2026-09-15", "kind": "yt"})
+    db.upsert_analysis("bk1", (
+        "## 2. Hot Topics\n"
+        "**1. Yen intervention watch as dollar weakens**\n"
+        "- *Tone:* Cautious (-1)\n\n"
+        "## 5. Anchor–Guest Tension\n"
+        "1. **Anchor question:** Will it hold?\n"
+        "   **Guest reply:** Maybe. **Tension point:** credibility\n"), None, None)
+    out = weekly.synthesize_week("2026-09-14", "2026-09-18")
+    assert not out.get("blocked") and not out.get("exists")
+    ed = db.edition_full("2026-09-14_to_2026-09-18")
+    assert ed["status"] not in ("blocked_no_evidence", "synth_failed")
+    assert len(ed["agenda"]) == 1
+
+
+def test_published_week_not_retroactively_blocked(week_db, monkeypatch):
+    """Required #2 regression: a later zero-evidence re-run must not strip a
+    week whose report was already produced."""
+    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
+    weekly.synthesize_week(W_START, W_END)
+    with db.conn() as c:
+        c.execute("DELETE FROM analyses")
+        c.execute("DELETE FROM transcript_chunks")
+        c.execute("DELETE FROM episodes")
+    out = weekly.synthesize_week(W_START, W_END)
+    assert out.get("exists") and not out.get("blocked")
+    ed = db.edition_full(f"{W_START}_to_{W_END}")
+    assert ed["status"] not in ("blocked_no_evidence", "synth_failed")
+
+
+def test_admin_synthesize_pipeline_mapping(week_db, monkeypatch):
+    """"Exists" no-ops must not be reported as a fresh "done" synthesis."""
+    from backend.app.api import admin
+    monkeypatch.setattr(weekly.llm, "chat_json", lambda *a, **k: _llm_payload())
+    admin.run_synthesize(W_START, W_END)
+    assert db.get_pipeline()["status"] == "done"
+    admin.run_synthesize(W_START, W_END)  # second call hits the exists path
+    p = db.get_pipeline()
+    assert p["status"] == "skipped" and "already present" in p["message"]
+
+
+def test_qc_withheld_week_keeps_blocked_status(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "bw.db")
+    db.init_db()
+    eid = db.mark_edition_blocked("2026-09-14", "2026-09-18",
+                                  "no episode evidence in window")
+    r = qcmod.run_qc(eid)
+    assert r["status"] == "FAIL" and r["blocked"]
+    assert db.edition_full(eid)["status"] == "blocked_no_evidence"
+
+
+def test_export_of_withheld_week_is_409(tmp_path, monkeypatch):
+    """Email/PDF renderers assume editorial payload keys — a withheld week must
+    be refused at the route boundary, not crash mid-render (found in live drill)."""
+    from fastapi.testclient import TestClient
+    from backend.app.main import app
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "ex.db")
+    monkeypatch.setattr(config, "ROOT", tmp_path)
+    db.init_db()
+    eid = db.mark_edition_blocked("2026-07-06", "2026-07-10", "drill")
+    client = TestClient(app)
+    assert client.get(f"/export/{eid}/email").status_code == 409
+    assert client.get(f"/export/{eid}/pdf").status_code == 409
+    assert client.get(f"/export/{eid}/csv").status_code == 200
+    # Required #7/#8: the read paths must not hand withheld weeks an
+    # empty-but-green QC payload or a raw edition dump.
+    d = client.get(f"/api/desk?edition={eid}").json()
+    assert d["status"] == "blocked_no_evidence"
+    assert d["qc"] is None and d["agenda"] == [] and d["narratives"] == []
+    e = client.get(f"/api/edition/{eid}").json()
+    assert e["status"] == "blocked_no_evidence"
+    assert e["qc"] is None and e["agenda"] == [] and e["narratives"] == []
+
+
+def test_empty_manifest_blocks_coverage_checks(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "em.db")
+    db.init_db()
+    eid = db.upsert_edition(_v2_payload(), {"episodes": []}, None)
+    r = qcmod.run_qc(eid)
+    assert r["status"] == "FAIL"
+    assert "minimum_source_coverage" in r["blocks"]
+    assert "source_manifest_saved" in r["blocks"]
+
+
+# --- stale-source detection ----------------------------------------------------
+
+def test_source_health_stale_flags(tmp_path, monkeypatch):
+    import datetime
+    monkeypatch.setattr(config, "DB_PATH", tmp_path / "st.db")
+    monkeypatch.setattr(config, "FETCH", dict(config.FETCH, stale_days=10))
+    db.init_db()
+    today = datetime.date.today()
+    for sid, kind in [("yt_old", "yt_playlist"), ("yt_fresh", "yt_playlist"),
+                      ("yt_starving", "yt_playlist"), ("yt_future", "yt_playlist"),
+                      ("yt_boot", "yt_playlist"), ("rss_old", "rss")]:
+        db.upsert_source({"id": sid, "name": sid, "outlet": "O", "kind": kind,
+                          "enabled": True})
+    db.upsert_episode({"id": "e1", "source_id": "yt_old", "title": "t",
+                       "show_name": "Old", "kind": "yt",
+                       "pub_date": (today - datetime.timedelta(days=30)).isoformat()})
+    db.upsert_episode({"id": "e2", "source_id": "yt_fresh", "title": "t",
+                       "show_name": "Fresh", "kind": "yt",
+                       "pub_date": (today - datetime.timedelta(days=1)).isoformat()})
+    db.upsert_episode({"id": "e3", "source_id": "yt_future", "title": "t",
+                       "show_name": "Future", "kind": "yt",
+                       "pub_date": (today + datetime.timedelta(days=5)).isoformat()})
+    db.log_source_run("yt_starving", "yt_playlist", True, 0, "0 new episodes")
+    health = {s["id"]: s for s in db.source_health()}
+    assert health["yt_old"]["stale"] is True
+    assert health["yt_old"]["last_episode"] == \
+        (today - datetime.timedelta(days=30)).isoformat()
+    assert health["yt_fresh"]["stale"] is False
+    assert health["yt_starving"]["stale"] is True   # ran, but never landed an episode
+    assert health["yt_boot"]["stale"] is False      # zero episodes before first run
+    assert health["yt_future"]["stale"] is True    # future-dated last episode is a fault
+    assert health["rss_old"]["stale"] is False     # RSS exempt — wire keeps flowing

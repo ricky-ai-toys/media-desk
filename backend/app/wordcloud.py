@@ -20,6 +20,7 @@ Editorial quality comes from three mechanisms:
 
 PNGs are cached under data/wordclouds/.
 """
+import datetime
 import re
 from collections import Counter
 from pathlib import Path
@@ -151,9 +152,22 @@ def _font_path() -> str | None:
 def _edition(edition_id: str) -> dict | None:
     with db.conn() as c:
         row = c.execute(
-            "SELECT id, start_date, end_date FROM editions WHERE id=?",
+            "SELECT id, start_date, end_date, created_at FROM editions WHERE id=?",
             (edition_id,)).fetchone()
     return dict(row) if row else None
+
+
+def _fresh(png: Path, created_at: str) -> bool:
+    """A cached cloud is valid only if drawn no earlier than the edition's
+    last write — re-synthesis must not keep serving the old image."""
+    if not png.exists() or not created_at:
+        return False
+    try:
+        mtime = datetime.datetime.fromtimestamp(
+            png.stat().st_mtime, tz=datetime.timezone.utc).isoformat()
+    except OSError:
+        return False
+    return mtime >= created_at
 
 
 def _prev_editions(edition: dict, limit: int = _BG_EDITIONS) -> list[dict]:
@@ -270,10 +284,13 @@ def _cloud(scored: dict[str, float], color_func) -> "WordCloud":
 def build_png(edition_id: str, week: str = "this") -> bytes | None:
     """Cached PNG for the edition ('this' or 'prev'), or None when it
     cannot be produced."""
+    ed = _edition(edition_id)
+    if not ed:
+        return None
     cache_dir = Path(config.ROOT / "data" / "wordclouds")
     suffix = "" if week == "this" else ".prev"
     cached = cache_dir / f"{edition_id}{suffix}.png"
-    if cached.exists():
+    if _fresh(cached, ed.get("created_at") or ""):
         return cached.read_bytes()
 
     try:
@@ -281,9 +298,6 @@ def build_png(edition_id: str, week: str = "this") -> bytes | None:
     except ImportError:
         return None
     if not _font_path():
-        return None
-    ed = _edition(edition_id)
-    if not ed:
         return None
     is_bigram = lambda w: " " in w  # noqa: E731
 

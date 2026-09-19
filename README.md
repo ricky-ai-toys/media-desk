@@ -99,19 +99,23 @@ It covers meta/desk/lifecycle/framing/radar/search/edition/export endpoints,
 search FTS, auth guards, the QC gate, synthesis integrity (server-side evidence
 overrides, LLM retry/failure markers) and lifecycle chaining rules.
 
-## Source candidates
-Candidate YouTube sources ship disabled. Verify captions and title matching on
-the server before enabling:
+## Source verification
+`scripts/verify_sources.py` checks a playlist's resolution, title matching,
+date obtainability (title date, flat-playlist upload_date, or the batched
+probe) and caption download before GO:
 ```bash
-.venv/bin/python scripts/verify_sources.py cnbc_china_connection
+.venv/bin/python scripts/verify_sources.py                     # disabled candidates
+.venv/bin/python scripts/verify_sources.py cnbc_squawk_box_us  # re-check a live source
 ```
-Source status (verified 2026-08-23):
-- `cnbc_china_connection` — official full-episode playlist confirmed; geo-restricted
-  in some regions, enable only on server-side GO.
-- `cnbc_squawk_box_asia` — clip-mode source (official playlist carries interview
-  segments, not full episodes); episodes surface as "Squawk Box Asia (segment
-  clips)" in every sample-frame disclosure.
-- `cnbc_street_signs_asia` — no official full-episode source exists; keep disabled.
+Status (2026-09-19):
+- `bloomberg_asia_trade` / `bloomberg_china_show` / `bloomberg_insight` —
+  clip-mode: dated full-episode uploads stopped 2026-09-08/09; daily undated
+  clips are ingested via the date-probe path and surface as "(segment clips)".
+- `cnbc_squawk_box_asia` / `cnbc_squawk_box_us` — enabled clip-mode sources.
+- `cnbc_china_connection` / `cnbc_street_signs_asia` — retired 2026-09: CNBC
+  closed its Hong Kong bureau and cancelled these shows; removed from the catalog.
+- CNBC "Watch In Full" full-episode playlists are country-locked against this
+  egress — set a `proxy_url` and re-run verify_sources before enabling.
 
 ## Report spec
 Section counts, vocabularies and word budgets live in
@@ -124,4 +128,7 @@ both the synthesis prompt and the QC gate. Change numbers there, nowhere else.
   this host and remove `tls internal` for a Let's Encrypt cert.
 - /etc/hosts line `127.0.0.1 media.ricky.study` is used for local CLI/dev
   access; delete it if you move to public DNS.
+- PDF export renders via headless Chrome with `--no-sandbox` (required when the
+  service runs as root); it only ever prints server-generated HTML, never
+  remote input.
 - CNBC Asia TV full episodes are re-run unless the playlist becomes available.

@@ -70,7 +70,12 @@ def run_synthesize(start: str | None = None, end: str | None = None, force: bool
     except Exception as e:  # noqa: BLE001
         db.upsert_pipeline("synth", "failed", str(e)[:300])
         raise HTTPException(500, str(e)[:300])
-    db.upsert_pipeline("synth", "done", f"week {start}..{end} synthesized")
+    if out.get("blocked"):
+        db.upsert_pipeline("synth", "blocked", f"week {start}..{end}: {out.get('reason')}")
+    elif out.get("exists"):
+        db.upsert_pipeline("synth", "skipped", f"week {start}..{end}: {out.get('message')}")
+    else:
+        db.upsert_pipeline("synth", "done", f"week {start}..{end} synthesized")
     return out
 
 

@@ -5,8 +5,11 @@ Stores articles (headline coverage only — framing and lead-lag, never quotes).
 import datetime
 
 import feedparser
+import httpx
 
 from .. import db
+
+FETCH_TIMEOUT = 30.0
 
 
 def _pub_iso(entry: dict) -> str:
@@ -22,7 +25,13 @@ def _pub_iso(entry: dict) -> str:
 
 
 def fetch_feed(source: dict) -> dict:
-    feed = feedparser.parse(source["feed_url"])
+    try:
+        r = httpx.get(source["feed_url"], timeout=FETCH_TIMEOUT, follow_redirects=True)
+        r.raise_for_status()
+    except httpx.HTTPError as e:
+        db.log_source_run(source["id"], "rss", False, 0, f"fetch error: {e}")
+        return {"source": source["id"], "ok": False, "found": 0, "error": str(e)[:200]}
+    feed = feedparser.parse(r.content)
     if feed.get("bozo"):
         db.log_source_run(source["id"], "rss", False, 0,
                           f"feed parse error: {feed.get('bozo_exception', '')}")
